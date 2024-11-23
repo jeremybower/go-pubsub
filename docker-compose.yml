@@ -1,0 +1,26 @@
+services:
+  devtools:
+    build:
+      context: .devcontainer/devtools
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    hostname: devtools
+    volumes:
+      - .:/workspace:cached
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    hostname: postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    expose:
+      - 5432
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:

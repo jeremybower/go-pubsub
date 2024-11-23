@@ -1,0 +1,14 @@
+{
+  "editor.formatOnSave": true,
+  "files.exclude": {
+    "**/._*": true
+  },
+  "files.insertFinalNewline": true,
+  "files.trimFinalNewlines": true,
+  "files.trimTrailingWhitespace": true,
+  "go.testEnvFile": "${workspaceFolder}/.env",
+  "[go]": {
+    "editor.defaultFormatter": "golang.go",
+    "editor.formatOnSave": true
+  }
+}

@@ -1,0 +1,7 @@
+services:
+  devtools:
+    build:
+      args:
+        USERNAME: ${DEVTOOLS_USERNAME}
+        USER_UID: ${DEVTOOLS_UID}
+        USER_GID: ${DEVTOOLS_GID}

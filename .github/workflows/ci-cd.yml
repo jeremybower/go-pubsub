@@ -1,0 +1,102 @@
+name: CI/CD
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+    tags-ignore:
+      - "v*-prerelease+*" # excludes v1.2.3-prerelease+3
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.prepare.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: "0"
+
+      - name: Prepare environment
+        if: ${{ !env.SKIP_JOB }}
+        run: |
+          echo "DEVTOOLS_USERNAME=$(id -un)" >> $GITHUB_ENV
+          echo "DEVTOOLS_UID=$(id -u)" >> $GITHUB_ENV
+          echo "DEVTOOLS_GID=$(id -g)" >> $GITHUB_ENV
+          echo "DOCKER_COMPOSE_CMD=docker compose -f docker-compose.yml -f .github/docker-compose.yml" >> $GITHUB_ENV
+
+      - name: Start containers
+        run: |
+          make init
+          ${{ env.DOCKER_COMPOSE_CMD }} up --detach --wait
+          ${{ env.DOCKER_COMPOSE_CMD }} exec --user root devtools /usr/local/sbin/developermod ${{ env.DEVTOOLS_USERNAME }} ${{ env.DEVTOOLS_UID }} ${{ env.DEVTOOLS_GID }} /usr/bin/bash
+
+      - name: Test
+        run: |
+          ${{ env.DOCKER_COMPOSE_CMD }} exec --user ${{ env.DEVTOOLS_USERNAME }} --workdir /workspace devtools make test
+
+      - name: Stop containers
+        run: |
+          ${{ env.DOCKER_COMPOSE_CMD }} down
+
+      - name: Calculate prerelease version
+        id: semver
+        uses: paulhatch/semantic-version@v5.4.0
+        if: github.ref == 'refs/heads/main'
+        with:
+          tag_prefix: v
+          major_pattern: "#major"
+          minor_pattern: "#minor"
+          version_format: "v${major}.${minor}.${patch}-prerelease+${increment}"
+          search_commit_body: true
+
+      - name: Prepare
+        id: prepare
+        run: |
+          # Change the version based on the branch
+          if [[ "${{ github.ref}}" == "refs/heads/main" ]]; then
+            # Use the prerelease version when building from main
+            echo "version=${{ steps.semver.outputs.version }}" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.ref }}" == "refs/tags/v"* ]]; then
+            # Use the actual version when building from a tag
+            echo "version=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=v0.0.0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Tag commit version
+        if: github.ref == 'refs/heads/main'
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git tag -a ${{ steps.prepare.outputs.version }} -m "${{ steps.prepare.outputs.version }}"
+          git push origin ${{ steps.prepare.outputs.version }}
+
+  release:
+    name: Release
+    needs: build
+    runs-on: ubuntu-24.04
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: "0"
+
+      # Only draft a release for version tags
+      - name: Draft a release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          draft: true

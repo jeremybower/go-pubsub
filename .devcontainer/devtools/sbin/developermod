@@ -1,0 +1,69 @@
+#! /bin/bash
+
+# Exit on error.
+set -euo pipefail
+
+# Get the old username.
+old_username=$(cat /root/developer)
+
+# Extract the arguments.
+username=${1}
+user_uid=${2}
+user_gid=${3}
+user_shell_path=${4}
+
+# Get the old group properties.
+old_user_uid=$(getent passwd ${old_username} | cut -d: -f3)
+old_user_gid=$(getent group ${old_username} | cut -d: -f3)
+old_shell_path=$(getent passwd ${old_username} | cut -d: -f7)
+old_group_name=$(getent group ${old_user_gid} | cut -d: -f1)
+
+# Modify the group.
+if [[ "${old_group_name}" != "${username}" ]]; then
+	echo "Modifying group name to ${username}"
+	groupmod --new-name ${username} ${old_group_name}
+fi
+if [[ "${old_user_gid}" != "${user_gid}" ]]; then
+	echo "Modifying group id to ${user_gid}"
+	groupmod --gid ${user_gid} ${username}
+fi
+
+# Modify the user.
+if [[ "${old_username}" != "${username}" ]]; then
+	echo "Modifying login name to ${username}"
+	usermod --login ${username} ${old_username}
+	echo "Moving home directory to /home/${username}/"
+	usermod --move-home --home /home/${username}/ ${username} || (($?==0 || $?==12))
+fi
+if [[ "${old_user_uid}" != "${user_uid}" ]]; then
+	echo "Modifying user id to ${user_uid}"
+	usermod --uid ${user_uid} ${username}
+fi
+if [[ "${old_shell_path}" != "${user_shell_path}" ]]; then
+	echo "Modifying shell to ${user_shell_path}"
+	usermod --shell ${user_shell_path} ${username}
+fi
+
+# Update ownership of files.
+if [ "${old_user_uid}" -ne "${user_uid}" ]; then
+	echo "Updating user ownership of files (${old_user_uid} -> ${user_uid})"
+	find /usr/local -uid ${old_user_uid} -exec chown -h ${username} {} \;
+fi
+if [ "${old_user_gid}" -ne "${user_gid}" ]; then
+	echo "Updating group ownership of files (${old_user_gid} -> ${user_gid})"
+	find /usr/local -gid ${old_user_gid} -exec chgrp -h ${username} {} \;
+fi
+
+# Add the user as a sudoer.
+if [[ ! -f /etc/sudoers.d/${username} ]]; then
+	# Remove the old sudoers file.
+	rm -f /etc/sudoers.d/${old_username}
+
+	# Add the user as a sudoer.
+	echo "Adding '${username}' to sudoers"
+	echo ${username} ALL=\(root\) NOPASSWD:ALL > /etc/sudoers.d/${username}
+	chmod 0440 /etc/sudoers.d/${username}
+fi
+
+# Write the developer username to the environment.
+echo "${username}" > /root/developer

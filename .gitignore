@@ -1,0 +1,4 @@
+._*
+.DS_Store
+docker-compose.local.yml
+/coverage
