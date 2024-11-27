@@ -20,7 +20,7 @@ BEGIN
 	channel = concat('pubsub_message:', NEW.topic);
 	envelope = json_build_object(
 		'id', NEW.id,
-		'payload', NEW.payload, 
+		'payload', NEW.payload,
 		'published_at', NEW.published_at::timestamptz
 	)::text;
 	EXECUTE pg_notify(channel, envelope);
