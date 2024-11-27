@@ -39,6 +39,6 @@ func publish[T any](
 		return 0, err
 	}
 
-	logger.Info("pubsub: published message", slog.String("topic", topic), slog.Int64("message_id", id))
+	logger.Debug("pubsub: published message", slog.String("topic", topic), slog.Int64("message_id", id))
 	return id, nil
 }

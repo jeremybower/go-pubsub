@@ -83,15 +83,15 @@ func Subscribe[T any](
 	// Create a cancel function that cancels the context and
 	// waits for the subscribe function to return.
 	cancel := func() {
-		logger.Info("pubsub: cancelling subscription")
+		logger.Debug("pubsub: cancelling subscription")
 		cancelCtx()
 		wg.Wait()
 	}
 
 	// Start the subscription in a goroutine that can recover from errors.
 	go func() {
-		logger.Info("pubsub: subscribing to topic")
-		defer logger.Info("pubsub: unsubscribed from topic")
+		logger.Debug("pubsub: subscribing to topic")
+		defer logger.Debug("pubsub: unsubscribed from topic")
 
 		// Since defers are executed in LIFO order, the handlePanic function will be called
 		// before the wg.Done function. This is important because the wg.Done function must
@@ -138,7 +138,7 @@ func listen[T any](
 	deps dependencies,
 ) {
 	// Acquire a connection to the database from the pool.
-	logger.Info("pubsub: acquiring database connection")
+	logger.Debug("pubsub: acquiring database connection")
 	conn, err := deps.Acquire(ctx, dbPool)
 	if err != nil {
 		logger.Error("pubsub: failed to acquire database connection", slog.Any("error", err))
@@ -177,7 +177,7 @@ func listen[T any](
 	// If this subscription is starting for the first time, then
 	// the max message ID will be 0 and there are no missed messages.
 	if *maxMessageID != 0 && newMaxMessageID > *maxMessageID {
-		logger.Info("pubsub: checking for missed messages")
+		logger.Debug("pubsub: checking for missed messages")
 		sql := "SELECT id, payload, published_at FROM pubsub_messages WHERE topic = $1 AND id > $2 ORDER BY id ASC;"
 		rows, err := deps.Query(ctx, conn, sql, topic, *maxMessageID)
 		if err != nil {
@@ -205,8 +205,8 @@ func listen[T any](
 	// Log that the subscription is listening to the topic.
 	// Schedule a deferred callback to log when the subscription
 	// has stopped listening.
-	logger.Info("pubsub: started listening to topic")
-	defer logger.Info("pubsub: stopped listening to topic")
+	logger.Debug("pubsub: started listening to topic")
+	defer logger.Debug("pubsub: stopped listening to topic")
 
 	// Notify the caller that the subscription is listening for messages.
 	// Schedule a deferred callback to notify the caller when the subscription
@@ -219,7 +219,7 @@ func listen[T any](
 	for {
 		// Block until a notification is received. This is cancellable
 		// by the context passed to the subscribe function.
-		logger.Info("pubsub: waiting for message")
+		logger.Debug("pubsub: waiting for message")
 		notification, err := deps.WaitForNotification(ctx, conn)
 		if err != nil {
 			logger.Error("pubsub: failed while waiting for message", slog.Any("error", err))
@@ -287,6 +287,6 @@ func handleMessage[T any](
 		return
 	}
 
-	logger.Info("pubsub: received message", slog.Int64("message_id", id), slog.String("latency", time.Since(publishedAt).String()))
+	logger.Debug("pubsub: received message", slog.Int64("message_id", id), slog.String("latency", time.Since(publishedAt).String()))
 	msgHandler(message)
 }
