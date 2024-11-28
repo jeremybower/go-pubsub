@@ -9,7 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jeremybower/go-common/env"
-	"github.com/jeremybower/go-pubsub/db"
+	"github.com/jeremybower/go-pubsub/v2/db"
 	"github.com/neilotoole/slogt"
 	"github.com/stretchr/testify/require"
 )

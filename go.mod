@@ -1,4 +1,4 @@
-module github.com/jeremybower/go-pubsub
+module github.com/jeremybower/go-pubsub/v2
 
 go 1.23.3
 
