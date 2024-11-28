@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jeremybower/go-common"
 	"github.com/jeremybower/go-common/backoff"
 )
@@ -25,7 +26,6 @@ type MessageEvent[T any] struct {
 }
 
 type ErrorEvent struct {
-	Topic          string
 	SubscriptionId SubscriptionId
 	Error          error
 }
@@ -38,40 +38,46 @@ type SubscriptionEvent struct {
 
 type Subscription struct {
 	Id           SubscriptionId
-	Topic        string
 	Events       chan any
 	ctx          context.Context
+	dbPool       *pgxpool.Pool
 	logger       *slog.Logger
 	maxMessageID MessageId
 }
 
 func newSubscription(
 	ctx context.Context,
+	dbPool *pgxpool.Pool,
 	logger *slog.Logger,
 	id SubscriptionId,
-	topic string,
 	bufferSize int,
 ) *Subscription {
 	return &Subscription{
 		Id:     id,
-		Topic:  topic,
 		Events: make(chan any, bufferSize),
 		ctx:    ctx,
+		dbPool: dbPool,
 		logger: logger,
 	}
 }
 
-func (client *Client[T]) Subscribe(
+func Subscribe[T any](
 	ctx context.Context,
-	topic string,
+	dbPool *pgxpool.Pool,
+	topics []string,
 	bufferSize int,
 ) (*Subscription, error) {
 	if ctx == nil {
 		panic("pubsub: context is nil")
 	}
 
-	if strings.TrimSpace(topic) == "" {
-		panic("pubsub: topic is empty")
+	if dbPool == nil {
+		panic("pubsub: database pool is nil")
+	}
+
+	topics, err := validateTopics(topics)
+	if err != nil {
+		return nil, err
 	}
 
 	// Generate a unique identifier for this subscription.
@@ -85,18 +91,17 @@ func (client *Client[T]) Subscribe(
 
 	// Customize the logger for this subscription.
 	logger = logger.With(
-		slog.String("pubsub:topic", topic),
 		slog.String("pubsub:subscription_id", string(subscriptionId)),
 	)
 
 	// Create the subscription.
-	sub := newSubscription(ctx, logger, subscriptionId, topic, bufferSize)
+	sub := newSubscription(ctx, dbPool, logger, subscriptionId, bufferSize)
 
 	// Start the subscription in a goroutine that can recover from panics.
 	go func() {
 		// Since defers are executed in LIFO order, handle panics before closing the channel.
 		defer close(sub.Events)
-		defer client.handlePanic(sub)
+		defer handlePanic(sub)
 
 		// Use an exponential backoff to wait an increasing amount of time before trying to
 		// reconnect. This is useful for handling transient errors like network outages or
@@ -104,8 +109,8 @@ func (client *Client[T]) Subscribe(
 		exponentialBackoff := backoff.New(0, 60, 120, true)
 		for {
 			// Block while subscribed to the topic.
-			logger.Debug("pubsub: subscribing to topic")
-			client.subscribe(sub, &standardDependencies{})
+			logger.Debug("pubsub: subscribing to topics")
+			subscribe[T](sub, topics, &standardDependencies{})
 
 			// If the listener function returns, then either the context was cancelled or the
 			// the connection was lost.
@@ -120,17 +125,17 @@ func (client *Client[T]) Subscribe(
 	return sub, nil
 }
 
-func (client *Client[T]) subscribe(
+func subscribe[T any](
 	sub *Subscription,
+	topics []string,
 	deps dependencies,
 ) {
 	// Acquire a connection to the database from the pool.
 	sub.logger.Debug("pubsub: acquiring database connection")
-	conn, err := deps.Acquire(sub.ctx, client.dbPool)
+	conn, err := deps.Acquire(sub.ctx, sub.dbPool)
 	if err != nil {
 		err = fmt.Errorf("pubsub: failed to acquire database connection: %w", err)
 		sub.Events <- ErrorEvent{
-			Topic:          sub.Topic,
 			SubscriptionId: sub.Id,
 			Error:          err,
 		}
@@ -156,34 +161,29 @@ func (client *Client[T]) subscribe(
 	// message ID will be the last message ID that was processed before the
 	// connection was lost.
 	var newMaxMessageID MessageId
-	row := deps.QueryRow(sub.ctx, conn, "SELECT max_message_id FROM pubsub_subscribe($1);", sub.Topic)
+	row := deps.QueryRow(sub.ctx, conn, "SELECT max_message_id FROM pubsub_subscribe($1);", topics)
 	if err := row.Scan(&newMaxMessageID); err != nil {
 		err = fmt.Errorf("pubsub: failed to subscribe to topic: %w", err)
 		sub.Events <- ErrorEvent{
-			Topic:          sub.Topic,
 			SubscriptionId: sub.Id,
 			Error:          err,
 		}
 		return
 	}
 
-	// Log that the subscription is listening to the topic.
-	// Schedule a deferred callback to log when the subscription
-	// has stopped listening.
+	// Log that the subscription is subscribed to the topic.
 	sub.logger.Debug("pubsub: subscribed to topic")
 
-	// Notify the caller that the subscription is listening to the topic.
+	// Notify the caller that the subscription is subscribed to the topic.
 	// Schedule a deferred callback to notify the caller when the subscription
-	// has stopped listening.
+	// is cancelled
 	sub.Events <- SubscriptionEvent{
-		Topic:          sub.Topic,
 		SubscriptionId: sub.Id,
 		Subscribed:     true,
 	}
 	defer func() {
 		sub.logger.Debug("pubsub: unsubscribing from topic")
 		sub.Events <- SubscriptionEvent{
-			Topic:          sub.Topic,
 			SubscriptionId: sub.Id,
 			Subscribed:     false,
 		}
@@ -195,12 +195,11 @@ func (client *Client[T]) subscribe(
 	// the max message ID will be 0 and there are no missed messages.
 	if sub.maxMessageID != 0 && newMaxMessageID > sub.maxMessageID {
 		sub.logger.Debug("pubsub: checking for missed messages")
-		sql := "SELECT id, payload, published_at FROM pubsub_messages WHERE topic = $1 AND id > $2 ORDER BY id ASC;"
-		rows, err := deps.Query(sub.ctx, conn, sql, sub.Topic, sub.maxMessageID)
+		sql := "SELECT id, payload, published_at FROM pubsub_messages WHERE topic = ANY($1) AND id > $2 ORDER BY id ASC;"
+		rows, err := deps.Query(sub.ctx, conn, sql, topics, sub.maxMessageID)
 		if err != nil {
 			err = fmt.Errorf("pubsub: failed to check for missed messages: %w", err)
 			sub.Events <- ErrorEvent{
-				Topic:          sub.Topic,
 				SubscriptionId: sub.Id,
 				Error:          err,
 			}
@@ -215,14 +214,13 @@ func (client *Client[T]) subscribe(
 			if err := rows.Scan(&messageId, &payload, &publishedAt); err != nil {
 				err = fmt.Errorf("pubsub: failed to read missed message: %w", err)
 				sub.Events <- ErrorEvent{
-					Topic:          sub.Topic,
 					SubscriptionId: sub.Id,
 					Error:          err,
 				}
 				return
 			}
 
-			client.handlePayload(sub, messageId, payload, publishedAt)
+			handlePayload[T](sub, messageId, payload, publishedAt)
 			sub.maxMessageID = messageId
 		}
 	}
@@ -237,7 +235,6 @@ func (client *Client[T]) subscribe(
 		if err != nil {
 			err = fmt.Errorf("pubsub: failed while waiting for message: %w", err)
 			sub.Events <- ErrorEvent{
-				Topic:          sub.Topic,
 				SubscriptionId: sub.Id,
 				Error:          err,
 			}
@@ -254,7 +251,6 @@ func (client *Client[T]) subscribe(
 		if err := deps.UnmarshalStringJSON(notification.Payload, &envelope); err != nil {
 			err = fmt.Errorf("pubsub: failed to unmarshal envelope: %w", err)
 			sub.Events <- ErrorEvent{
-				Topic:          sub.Topic,
 				SubscriptionId: sub.Id,
 				Error:          err,
 			}
@@ -267,7 +263,7 @@ func (client *Client[T]) subscribe(
 		// select the max message ID, and start listening within a transaction, it
 		// seems more robust to check.
 		if envelope.MessageId > sub.maxMessageID {
-			client.handlePayload(sub, envelope.MessageId, envelope.Payload, envelope.PublishedAt)
+			handlePayload[T](sub, envelope.MessageId, envelope.Payload, envelope.PublishedAt)
 			sub.maxMessageID = envelope.MessageId
 		} else {
 			sub.logger.Warn("pubsub: ignoring out-of-order message",
@@ -278,7 +274,7 @@ func (client *Client[T]) subscribe(
 	}
 }
 
-func (client *Client[T]) handlePanic(sub *Subscription) {
+func handlePanic(sub *Subscription) {
 	if r := recover(); r != nil {
 		var err error
 		switch r := r.(type) {
@@ -292,14 +288,13 @@ func (client *Client[T]) handlePanic(sub *Subscription) {
 		}
 
 		sub.Events <- ErrorEvent{
-			Topic:          sub.Topic,
 			SubscriptionId: sub.Id,
 			Error:          err,
 		}
 	}
 }
 
-func (client *Client[T]) handlePayload(
+func handlePayload[T any](
 	sub *Subscription,
 	messageId MessageId,
 	payload string,
@@ -309,7 +304,6 @@ func (client *Client[T]) handlePayload(
 	if err := json.Unmarshal([]byte(payload), &message); err != nil {
 		err = fmt.Errorf("pubsub: failed to unmarshal message: %w", err)
 		sub.Events <- ErrorEvent{
-			Topic:          sub.Topic,
 			SubscriptionId: sub.Id,
 			Error:          err,
 		}
@@ -321,10 +315,26 @@ func (client *Client[T]) handlePayload(
 		slog.String("pubsub:latency", time.Since(publishedAt).String()),
 	)
 	sub.Events <- MessageEvent[T]{
-		Topic:          sub.Topic,
 		SubscriptionId: sub.Id,
 		MessageId:      messageId,
 		Message:        message,
 		PublishedAt:    publishedAt,
 	}
+}
+
+func validateTopics(topics []string) ([]string, error) {
+	validTopics := make([]string, 0, len(topics))
+	for _, topic := range topics {
+		if strings.TrimSpace(topic) == "" {
+			continue
+		}
+
+		if len(topic) >= 128 {
+			return nil, fmt.Errorf("%w (length >= 128): %q", ErrInvalidTopic, topic)
+		}
+
+		validTopics = append(validTopics, topic)
+	}
+
+	return validTopics, nil
 }

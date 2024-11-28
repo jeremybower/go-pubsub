@@ -35,16 +35,20 @@ CREATE TRIGGER pubsub_messages_notify_trigger
   EXECUTE FUNCTION pubsub_messages_notify_func();
 
 CREATE FUNCTION pubsub_subscribe(
-  topic text
+  topics text[]
 ) RETURNS TABLE(
 	max_message_id bigint
 ) AS $$
+DECLARE
+	topic text;
 BEGIN
 	-- Lock the table so that no messages are inserted between subscribing
 	-- and getting the max message id.
 	LOCK TABLE "pubsub_messages" IN EXCLUSIVE MODE;
-	EXECUTE format('LISTEN %I', concat('pubsub_message:', topic));
-	RETURN QUERY SELECT coalesce(max(tbl.id), 0) FROM pubsub_messages AS tbl;
+	FOREACH topic IN ARRAY topics LOOP
+		EXECUTE format('LISTEN %I', concat('pubsub_message:', topic));
+	END LOOP;
+	RETURN QUERY SELECT coalesce(max(tbl.id), 0) FROM pubsub_messages AS tbl WHERE tbl.topic = ANY(topics);
 END;
 $$
 LANGUAGE plpgsql;

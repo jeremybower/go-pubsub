@@ -5,20 +5,23 @@ import (
 	"log/slog"
 
 	"github.com/jeremybower/go-common"
+	"github.com/jeremybower/go-common/postgres"
 )
 
 type MessageId int64
 
-func (client *Client[T]) Publish(
+func Publish[T any](
 	ctx context.Context,
+	querier postgres.Querier,
 	topic string,
 	message T,
 ) (MessageId, error) {
-	return client.publish(ctx, topic, message, &standardDependencies{})
+	return publish(ctx, querier, topic, message, &standardDependencies{})
 }
 
-func (client *Client[T]) publish(
+func publish[T any](
 	ctx context.Context,
+	querier postgres.Querier,
 	topic string,
 	message T,
 	deps dependencies,
@@ -37,7 +40,7 @@ func (client *Client[T]) publish(
 
 	var id MessageId
 	sql := "INSERT INTO pubsub_messages (topic, payload) VALUES ($1, $2) RETURNING id;"
-	row := deps.QueryRow(ctx, client.dbPool, sql, topic, payload)
+	row := deps.QueryRow(ctx, querier, sql, topic, payload)
 	if err := row.Scan(&id); err != nil {
 		logger.Error("pubsub: failed to publish message", slog.Any("error", err))
 		return 0, err

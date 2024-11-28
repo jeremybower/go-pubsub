@@ -23,13 +23,10 @@ func TestPublish(t *testing.T) {
 	// Add a logger to the context.
 	ctx := common.WithLogger(context.Background(), slogt.New(t))
 
-	// Create a client.
-	client := NewClient[TestMessage](dbPool)
-
 	// Publish a message.
 	now := postgres.Time(time.Now())
 	expectedTopic := "test"
-	expectedMessageID, err := client.publish(ctx, expectedTopic, TestMessage{Value: 42}, &standardDependencies{})
+	expectedMessageID, err := publish(ctx, dbPool, expectedTopic, TestMessage{Value: 42}, &standardDependencies{})
 	require.NoError(t, err)
 	require.Greater(t, expectedMessageID, MessageId(0))
 
@@ -57,9 +54,6 @@ func TestPublishWhenSerializationFails(t *testing.T) {
 	// Add a logger to the context.
 	ctx := common.WithLogger(context.Background(), slogt.New(t))
 
-	// Create a client.
-	client := NewClient[TestMessage](dbPool)
-
 	// Create a message.
 	message := TestMessage{Value: 42}
 
@@ -68,7 +62,7 @@ func TestPublishWhenSerializationFails(t *testing.T) {
 	deps.On("MarshalStringJSON", message).Once().Return("", assert.AnError)
 
 	// Publish a message.
-	messageID, err := client.publish(ctx, "test", message, deps)
+	messageID, err := publish(ctx, dbPool, "test", message, deps)
 	assert.ErrorIs(t, err, assert.AnError)
 	assert.Zero(t, messageID)
 
@@ -85,9 +79,6 @@ func TestPublishWhenQueryRowScanFails(t *testing.T) {
 
 	// Add a logger to the context.
 	ctx := common.WithLogger(context.Background(), slogt.New(t))
-
-	// Create a client.
-	client := NewClient[TestMessage](dbPool)
 
 	// Setup the mock dependencies.
 	stdDeps := &standardDependencies{}
@@ -108,7 +99,7 @@ func TestPublishWhenQueryRowScanFails(t *testing.T) {
 	deps.On("QueryRow", ctx, dbPool, "INSERT INTO pubsub_messages (topic, payload) VALUES ($1, $2) RETURNING id;", []any{"test", `{"value":42}`}).Once().Return(mockRow, nil)
 
 	// Publish a message.
-	messageID, err := client.publish(ctx, "test", message, deps)
+	messageID, err := publish(ctx, dbPool, "test", message, deps)
 	assert.ErrorIs(t, err, assert.AnError)
 	assert.Zero(t, messageID)
 
