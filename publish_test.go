@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jeremybower/go-common"
 	"github.com/jeremybower/go-common/postgres"
 	"github.com/neilotoole/slogt"
 	"github.com/stretchr/testify/assert"
@@ -15,19 +16,25 @@ import (
 func TestPublish(t *testing.T) {
 	t.Parallel()
 
+	// Create a database pool for testing.
 	dbPool := databasePoolForTesting(t)
 	defer dbPool.Close()
 
-	logger := slogt.New(t)
+	// Add a logger to the context.
+	ctx := common.WithLogger(context.Background(), slogt.New(t))
 
+	// Create a client.
+	client := NewClient[TestMessage](dbPool)
+
+	// Publish a message.
 	now := postgres.Time(time.Now())
-	ctx := context.Background()
 	expectedTopic := "test"
-	expectedMessageID, err := publish(ctx, logger, dbPool, expectedTopic, &TestMessage{Value: 42}, &standardDependencies{})
+	expectedMessageID, err := client.publish(ctx, expectedTopic, TestMessage{Value: 42}, &standardDependencies{})
 	require.NoError(t, err)
-	require.Greater(t, expectedMessageID, int64(0))
+	require.Greater(t, expectedMessageID, MessageId(0))
 
-	var actualMessageID int64
+	// Verify the message was published.
+	var actualMessageID MessageId
 	var actualTopic string
 	var actualPayload string
 	var actualPublishedAt time.Time
@@ -43,35 +50,52 @@ func TestPublish(t *testing.T) {
 func TestPublishWhenSerializationFails(t *testing.T) {
 	t.Parallel()
 
+	// Create a database pool for testing.
 	dbPool := databasePoolForTesting(t)
 	defer dbPool.Close()
 
-	logger := slogt.New(t)
+	// Add a logger to the context.
+	ctx := common.WithLogger(context.Background(), slogt.New(t))
 
-	message := &TestMessage{Value: 42}
+	// Create a client.
+	client := NewClient[TestMessage](dbPool)
 
+	// Create a message.
+	message := TestMessage{Value: 42}
+
+	// Setup the mock dependencies.
 	deps := &mockDependencies{}
 	deps.On("MarshalStringJSON", message).Once().Return("", assert.AnError)
 
-	ctx := context.Background()
-	messageID, err := publish(ctx, logger, dbPool, "test", message, deps)
+	// Publish a message.
+	messageID, err := client.publish(ctx, "test", message, deps)
 	assert.ErrorIs(t, err, assert.AnError)
 	assert.Zero(t, messageID)
 
+	// Verify the dependencies were called.
 	deps.AssertExpectations(t)
 }
 
 func TestPublishWhenQueryRowScanFails(t *testing.T) {
 	t.Parallel()
 
+	// Create a database pool for testing.
 	dbPool := databasePoolForTesting(t)
 	defer dbPool.Close()
 
-	logger := slogt.New(t)
+	// Add a logger to the context.
+	ctx := common.WithLogger(context.Background(), slogt.New(t))
 
+	// Create a client.
+	client := NewClient[TestMessage](dbPool)
+
+	// Setup the mock dependencies.
 	stdDeps := &standardDependencies{}
 
-	message := &TestMessage{Value: 42}
+	// Create a message.
+	message := TestMessage{Value: 42}
+
+	// Setup mock dependencies.
 	messageJSON, err := stdDeps.MarshalStringJSON(message)
 	require.NoError(t, err)
 	require.NotEmpty(t, messageJSON)
@@ -81,12 +105,13 @@ func TestPublishWhenQueryRowScanFails(t *testing.T) {
 
 	deps := &mockDependencies{}
 	deps.On("MarshalStringJSON", message).Once().Return(messageJSON, nil)
-	deps.On("QueryRow", context.Background(), dbPool, "INSERT INTO pubsub_messages (topic, payload) VALUES ($1, $2) RETURNING id;", []any{"test", `{"value":42}`}).Once().Return(mockRow, nil)
+	deps.On("QueryRow", ctx, dbPool, "INSERT INTO pubsub_messages (topic, payload) VALUES ($1, $2) RETURNING id;", []any{"test", `{"value":42}`}).Once().Return(mockRow, nil)
 
-	ctx := context.Background()
-	messageID, err := publish(ctx, logger, dbPool, "test", message, deps)
+	// Publish a message.
+	messageID, err := client.publish(ctx, "test", message, deps)
 	assert.ErrorIs(t, err, assert.AnError)
 	assert.Zero(t, messageID)
 
+	// Verify the dependencies were called.
 	deps.AssertExpectations(t)
 }

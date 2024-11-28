@@ -19,7 +19,7 @@ DECLARE
 BEGIN
 	channel = concat('pubsub_message:', NEW.topic);
 	envelope = json_build_object(
-		'id', NEW.id,
+		'message_id', NEW.id,
 		'payload', NEW.payload,
 		'published_at', NEW.published_at::timestamptz
 	)::text;
