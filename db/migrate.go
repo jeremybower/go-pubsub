@@ -28,6 +28,7 @@ func Migrate(ctx context.Context, logger *slog.Logger, url *url.URL) error {
 
 func createDbmateDB(logger *slog.Logger, url *url.URL) *dbmate.DB {
 	db := dbmate.New(url)
+	db.MigrationsTableName = "pubsub_schema_migrations"
 	db.AutoDumpSchema = false
 	db.FS = fs
 	db.Log = slogw.New(slog.LevelInfo, logger)
