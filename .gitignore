@@ -1,4 +1,5 @@
 ._*
 .DS_Store
-docker-compose.local.yml
 /coverage
+/db/schema.sql
+docker-compose.local.yml
