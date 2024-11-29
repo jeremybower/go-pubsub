@@ -2,7 +2,6 @@ package pubsub
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -17,17 +16,13 @@ import (
 
 type SubscriptionId string
 
-type MessageEvent[T any] struct {
+type MessageEvent struct {
 	Topic          string
 	SubscriptionId SubscriptionId
 	MessageId      MessageId
-	Message        T
+	MessageType    string
+	Message        any
 	PublishedAt    time.Time
-}
-
-type ErrorEvent struct {
-	SubscriptionId SubscriptionId
-	Error          error
 }
 
 type SubscriptionEvent struct {
@@ -37,12 +32,14 @@ type SubscriptionEvent struct {
 }
 
 type Subscription struct {
-	Id           SubscriptionId
-	Events       chan any
-	ctx          context.Context
-	dbPool       *pgxpool.Pool
-	logger       *slog.Logger
-	maxMessageID MessageId
+	Id            SubscriptionId
+	Events        chan any
+	ctx           context.Context
+	dbPool        *pgxpool.Pool
+	logger        *slog.Logger
+	maxMessageID  MessageId
+	unmarshallers map[string]Unmarshaller
+	errorHandler  func(error)
 }
 
 func newSubscription(
@@ -51,21 +48,60 @@ func newSubscription(
 	logger *slog.Logger,
 	id SubscriptionId,
 	bufferSize int,
+	unmarshallers map[string]Unmarshaller,
 ) *Subscription {
 	return &Subscription{
-		Id:     id,
-		Events: make(chan any, bufferSize),
-		ctx:    ctx,
-		dbPool: dbPool,
-		logger: logger,
+		Id:            id,
+		Events:        make(chan any, bufferSize),
+		ctx:           ctx,
+		dbPool:        dbPool,
+		logger:        logger,
+		unmarshallers: unmarshallers,
+		errorHandler:  func(error) {},
 	}
 }
 
-func Subscribe[T any](
+type SubscribeOptions struct {
+	bufferSize    int
+	unmarshallers map[string]Unmarshaller
+}
+
+func defaultSubscribeOptions() *SubscribeOptions {
+	return &SubscribeOptions{
+		unmarshallers: make(map[string]Unmarshaller),
+	}
+}
+
+type SubscriptionOption func(opts *SubscribeOptions)
+
+func WithBufferSize(bufferSize int) SubscriptionOption {
+	return func(options *SubscribeOptions) {
+		options.bufferSize = bufferSize
+	}
+}
+
+func WithMessage[T any]() SubscriptionOption {
+	// Check if the type T is a string.
+	var t T
+	switch any(t).(type) {
+	case string:
+		return WithUnmarshaller(fullyQualifiedNameFromType[string](), UnmarshalString)
+	default:
+		return WithUnmarshaller(fullyQualifiedNameFromType[T](), UnmarshalJSON[T])
+	}
+}
+
+func WithUnmarshaller(typ string, unmarshaller Unmarshaller) SubscriptionOption {
+	return func(options *SubscribeOptions) {
+		options.unmarshallers[typ] = unmarshaller
+	}
+}
+
+func Subscribe(
 	ctx context.Context,
 	dbPool *pgxpool.Pool,
 	topics []string,
-	bufferSize int,
+	opts ...SubscriptionOption,
 ) (*Subscription, error) {
 	if ctx == nil {
 		panic("pubsub: context is nil")
@@ -73,6 +109,11 @@ func Subscribe[T any](
 
 	if dbPool == nil {
 		panic("pubsub: database pool is nil")
+	}
+
+	options := defaultSubscribeOptions()
+	for _, opt := range opts {
+		opt(options)
 	}
 
 	topics, err := validateTopics(topics)
@@ -95,7 +136,7 @@ func Subscribe[T any](
 	)
 
 	// Create the subscription.
-	sub := newSubscription(ctx, dbPool, logger, subscriptionId, bufferSize)
+	sub := newSubscription(ctx, dbPool, logger, subscriptionId, options.bufferSize, options.unmarshallers)
 
 	// Start the subscription in a goroutine that can recover from panics.
 	go func() {
@@ -110,7 +151,7 @@ func Subscribe[T any](
 		for {
 			// Block while subscribed to the topic.
 			logger.Debug("pubsub: subscribing to topics")
-			subscribe[T](sub, topics, &standardDependencies{})
+			subscribe(sub, topics, &standardDependencies{})
 
 			// If the listener function returns, then either the context was cancelled or the
 			// the connection was lost.
@@ -125,7 +166,7 @@ func Subscribe[T any](
 	return sub, nil
 }
 
-func subscribe[T any](
+func subscribe(
 	sub *Subscription,
 	topics []string,
 	deps dependencies,
@@ -134,11 +175,8 @@ func subscribe[T any](
 	sub.logger.Debug("pubsub: acquiring database connection")
 	conn, err := deps.Acquire(sub.ctx, sub.dbPool)
 	if err != nil {
-		err = fmt.Errorf("pubsub: failed to acquire database connection: %w", err)
-		sub.Events <- ErrorEvent{
-			SubscriptionId: sub.Id,
-			Error:          err,
-		}
+		sub.logger.Error("pubsub: failed to acquire database connection", slog.Any("error", err))
+		sub.errorHandler(err)
 		return
 	}
 	defer conn.Release()
@@ -163,11 +201,8 @@ func subscribe[T any](
 	var newMaxMessageID MessageId
 	row := deps.QueryRow(sub.ctx, conn, "SELECT max_message_id FROM pubsub_subscribe($1);", topics)
 	if err := row.Scan(&newMaxMessageID); err != nil {
-		err = fmt.Errorf("pubsub: failed to subscribe to topic: %w", err)
-		sub.Events <- ErrorEvent{
-			SubscriptionId: sub.Id,
-			Error:          err,
-		}
+		sub.logger.Error("pubsub: failed to subscribe to topic", slog.Any("error", err))
+		sub.errorHandler(err)
 		return
 	}
 
@@ -195,37 +230,33 @@ func subscribe[T any](
 	// the max message ID will be 0 and there are no missed messages.
 	if sub.maxMessageID != 0 && newMaxMessageID > sub.maxMessageID {
 		sub.logger.Debug("pubsub: checking for missed messages")
-		sql := "SELECT id, payload, published_at FROM pubsub_messages WHERE topic = ANY($1) AND id > $2 ORDER BY id ASC;"
+		sql := `SELECT id, topic, "type", payload, published_at FROM pubsub_messages WHERE topic = ANY($1) AND id > $2 ORDER BY id ASC;`
 		rows, err := deps.Query(sub.ctx, conn, sql, topics, sub.maxMessageID)
 		if err != nil {
-			err = fmt.Errorf("pubsub: failed to check for missed messages: %w", err)
-			sub.Events <- ErrorEvent{
-				SubscriptionId: sub.Id,
-				Error:          err,
-			}
+			sub.logger.Error("pubsub: failed to check for missed messages", slog.Any("error", err))
+			sub.errorHandler(err)
 			return
 		}
 		defer rows.Close()
 
 		for rows.Next() {
 			var messageId MessageId
+			var topic string
+			var messageType string
 			var payload string
 			var publishedAt time.Time
-			if err := rows.Scan(&messageId, &payload, &publishedAt); err != nil {
-				err = fmt.Errorf("pubsub: failed to read missed message: %w", err)
-				sub.Events <- ErrorEvent{
-					SubscriptionId: sub.Id,
-					Error:          err,
-				}
+			if err := rows.Scan(&messageId, &topic, &messageType, &payload, &publishedAt); err != nil {
+				sub.logger.Error("pubsub: failed to read missed message", slog.Any("error", err))
+				sub.errorHandler(err)
 				return
 			}
 
-			handlePayload[T](sub, messageId, payload, publishedAt)
+			handlePayload(sub, topic, messageId, messageType, payload, publishedAt)
 			sub.maxMessageID = messageId
 		}
 	}
 
-	// Wait for and process messages until the context is cancelled or a
+	// Block and process messages until the context is cancelled or a
 	// connection error occurs.
 	for {
 		// Block until a notification is received. This is cancellable
@@ -233,27 +264,22 @@ func subscribe[T any](
 		sub.logger.Debug("pubsub: waiting for message")
 		notification, err := deps.WaitForNotification(sub.ctx, conn)
 		if err != nil {
-			err = fmt.Errorf("pubsub: failed while waiting for message: %w", err)
-			sub.Events <- ErrorEvent{
-				SubscriptionId: sub.Id,
-				Error:          err,
-			}
+			sub.logger.Error("pubsub: failed while waiting for message", slog.Any("error", err))
+			sub.errorHandler(err)
 			return
 		}
 
 		// Unmarshal the envelope.
-		// Report errors but do not stop handling messages.
 		var envelope struct {
 			MessageId   MessageId `json:"message_id"`
+			Type        string    `json:"type"`
 			Payload     string    `json:"payload"`
 			PublishedAt time.Time `json:"published_at"`
 		}
 		if err := deps.UnmarshalStringJSON(notification.Payload, &envelope); err != nil {
-			err = fmt.Errorf("pubsub: failed to unmarshal envelope: %w", err)
-			sub.Events <- ErrorEvent{
-				SubscriptionId: sub.Id,
-				Error:          err,
-			}
+			// Report errors, but continue handling messages.
+			sub.logger.Error("pubsub: failed to unmarshal envelope", slog.Any("error", err))
+			sub.errorHandler(err)
 			continue
 		}
 
@@ -263,7 +289,17 @@ func subscribe[T any](
 		// select the max message ID, and start listening within a transaction, it
 		// seems more robust to check.
 		if envelope.MessageId > sub.maxMessageID {
-			handlePayload[T](sub, envelope.MessageId, envelope.Payload, envelope.PublishedAt)
+			// Handle the message payload.
+			handlePayload(
+				sub,
+				notification.Channel,
+				envelope.MessageId,
+				envelope.Type,
+				envelope.Payload,
+				envelope.PublishedAt,
+			)
+
+			// Update the max message ID.
 			sub.maxMessageID = envelope.MessageId
 		} else {
 			sub.logger.Warn("pubsub: ignoring out-of-order message",
@@ -287,36 +323,47 @@ func handlePanic(sub *Subscription) {
 			err = errors.New(msg)
 		}
 
-		sub.Events <- ErrorEvent{
-			SubscriptionId: sub.Id,
-			Error:          err,
-		}
+		sub.logger.Error("pubsub: subscription panicked", slog.Any("error", err))
+		sub.errorHandler(err)
 	}
 }
 
-func handlePayload[T any](
+func handlePayload(
 	sub *Subscription,
+	topic string,
 	messageId MessageId,
+	messageType string,
 	payload string,
 	publishedAt time.Time,
 ) {
-	var message T
-	if err := json.Unmarshal([]byte(payload), &message); err != nil {
-		err = fmt.Errorf("pubsub: failed to unmarshal message: %w", err)
-		sub.Events <- ErrorEvent{
-			SubscriptionId: sub.Id,
-			Error:          err,
-		}
+	logger := sub.logger.With(
+		slog.Int64("pubsub:message_id", int64(messageId)),
+		slog.String("pubsub:message_type", messageType),
+	)
+
+	logger.Debug("pubsub: received message",
+		slog.Duration("pubsub:latency", time.Since(publishedAt)),
+	)
+
+	unmarshaller, ok := sub.unmarshallers[messageType]
+	if !ok {
+		logger.Error("pubsub: no unmarshaller for type", slog.String("type", messageType))
+		sub.errorHandler(fmt.Errorf("%w: %q", ErrNoUnmarshaller, messageType))
 		return
 	}
 
-	sub.logger.Debug("pubsub: received message",
-		slog.Int64("pubsub:message_id", int64(messageId)),
-		slog.String("pubsub:latency", time.Since(publishedAt).String()),
-	)
-	sub.Events <- MessageEvent[T]{
+	message, err := unmarshaller(payload)
+	if err != nil {
+		logger.Error("pubsub: failed to unmarshal message", slog.String("error", err.Error()))
+		sub.errorHandler(err)
+		return
+	}
+
+	sub.Events <- MessageEvent{
+		Topic:          topic,
 		SubscriptionId: sub.Id,
 		MessageId:      messageId,
+		MessageType:    messageType,
 		Message:        message,
 		PublishedAt:    publishedAt,
 	}

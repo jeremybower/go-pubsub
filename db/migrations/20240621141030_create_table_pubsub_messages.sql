@@ -2,6 +2,7 @@
 CREATE TABLE pubsub_messages(
   id bigserial PRIMARY KEY,
 	topic text NOT NULL,
+	"type" text NOT NULL,
 	payload text NOT NULL,
 	published_at timestamp NOT NULL DEFAULT NOW(),
 
@@ -20,6 +21,7 @@ BEGIN
 	channel = concat('pubsub_message:', NEW.topic);
 	envelope = json_build_object(
 		'message_id', NEW.id,
+		'type', NEW.type,
 		'payload', NEW.payload,
 		'published_at', NEW.published_at::timestamptz
 	)::text;

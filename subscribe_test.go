@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math/rand"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,6 +21,36 @@ import (
 
 type TestMessage struct {
 	Value int `json:"value"`
+}
+
+var messageTypesForTesting = map[string]Unmarshaller{
+	fullyQualifiedNameFromType[TestMessage](): UnmarshalJSON[TestMessage],
+}
+
+func TestSubscriptionOptionsWithBufferSize(t *testing.T) {
+	t.Parallel()
+
+	opts := defaultSubscribeOptions()
+	WithBufferSize(10)(opts)
+	assert.Equal(t, 10, opts.bufferSize)
+}
+
+func TestSubscriptionOptionWithJsonMessage(t *testing.T) {
+	t.Parallel()
+
+	opts := defaultSubscribeOptions()
+	WithMessage[TestMessage]()(opts)
+	fqn := fullyQualifiedNameFromType[TestMessage]()
+	assert.NotNil(t, opts.unmarshallers[fqn])
+}
+
+func TestSubscriptionOptionWithStringMessage(t *testing.T) {
+	t.Parallel()
+
+	opts := defaultSubscribeOptions()
+	WithMessage[string]()(opts)
+	fqn := fullyQualifiedNameFromType[string]()
+	assert.NotNil(t, opts.unmarshallers[fqn])
 }
 
 func TestSubscribe(t *testing.T) {
@@ -39,7 +70,7 @@ func TestSubscribe(t *testing.T) {
 	// Subscribe to a topic.
 	const topic = "test"
 	topics := []string{topic}
-	sub, err := Subscribe[TestMessage](ctx, dbPool, topics, 0)
+	sub, err := Subscribe(ctx, dbPool, topics, WithMessage[TestMessage]())
 	require.NoError(t, err)
 	require.NotNil(t, sub)
 
@@ -59,7 +90,6 @@ func TestSubscribe(t *testing.T) {
 	cancel()
 
 	// Wait for the subscription to cancel.
-	waitError(t, sub, "pubsub: failed while waiting for message: context canceled")
 	waitSubscribed(t, sub, false)
 	waitCancelled(t, sub)
 }
@@ -81,7 +111,7 @@ func TestSubscribeExcluesOtherTopics(t *testing.T) {
 	// Subscribe to a topic.
 	const topic = "test"
 	topics := []string{topic}
-	sub, err := Subscribe[TestMessage](ctx, dbPool, topics, 0)
+	sub, err := Subscribe(ctx, dbPool, topics, WithMessage[TestMessage]())
 	require.NoError(t, err)
 	require.NotNil(t, sub)
 
@@ -98,7 +128,6 @@ func TestSubscribeExcluesOtherTopics(t *testing.T) {
 	cancel()
 
 	// Wait for the subscription to cancel.
-	waitError(t, sub, "pubsub: failed while waiting for message: context canceled")
 	waitSubscribed(t, sub, false)
 	waitCancelled(t, sub)
 }
@@ -136,9 +165,9 @@ func TestSubscribeWhenMissedMessages(t *testing.T) {
 
 	// Listen for messages.
 	subscriptionId := SubscriptionId(uuid.NewString())
-	sub := newSubscription(ctx, dbPool, logger, subscriptionId, 0)
+	sub := newSubscription(ctx, dbPool, logger, subscriptionId, 0, messageTypesForTesting)
 	sub.maxMessageID = messageIDs[0]
-	go subscribe[TestMessage](sub, topics, &standardDependencies{})
+	go subscribe(sub, topics, &standardDependencies{})
 
 	// Wait for the subscription to be established.
 	waitSubscribed(t, sub, true)
@@ -152,62 +181,82 @@ func TestSubscribeWhenMissedMessages(t *testing.T) {
 	cancel()
 
 	// Wait for the events.
-	waitError(t, sub, "pubsub: failed while waiting for message: timeout: context already done: context canceled")
 	waitSubscribed(t, sub, false)
 }
 
-func TestSubscribeParams(t *testing.T) {
+func TestSubscribeWhenContextIsNil(t *testing.T) {
 	t.Parallel()
+
+	// Create a nil context.
+	var nilCtx context.Context
 
 	// Create a database pool for testing.
 	dbPool := databasePoolForTesting(t)
 	defer dbPool.Close()
 
-	// Add a logger to the context.
-	ctx := common.WithLogger(context.Background(), slogt.New(t))
+	// Setup the topics.
+	topics := []string{"test"}
 
-	// Test cases.
-	tests := []struct {
-		name       string
-		dbPool     *pgxpool.Pool
-		topics     []string
-		panicValue any
-		errorValue string
-	}{
-		{
-			name:       "dbPool is nil",
-			topics:     []string{"test"},
-			panicValue: "pubsub: database pool is nil",
-		},
-		{
-			name:       "topic validation fails",
-			dbPool:     dbPool,
-			topics:     []string{strings.Repeat("a", 129), ""},
-			errorValue: "pubsub: invalid topic (length >= 128)",
-		},
-	}
+	// Test that Subscribe panics when the context is nil.
+	assert.PanicsWithValue(t, "pubsub: context is nil", func() {
+		Subscribe(nilCtx, dbPool, topics)
+	})
+}
 
-	// Run the test cases.
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Create a cancelable context to stop listening.
-			ctx, cancel := context.WithCancel(ctx)
-			defer cancel()
+func TestSubscribeWhenDatabasePoolIsNil(t *testing.T) {
+	t.Parallel()
 
-			if tt.errorValue != "" {
-				_, err := Subscribe[TestMessage](ctx, tt.dbPool, tt.topics, 0)
-				assert.ErrorContains(t, err, tt.errorValue)
-			} else if tt.panicValue == nil {
-				assert.NotPanics(t, func() {
-					Subscribe[TestMessage](ctx, tt.dbPool, tt.topics, 0)
-				})
-			} else {
-				assert.PanicsWithValue(t, tt.panicValue, func() {
-					Subscribe[TestMessage](ctx, tt.dbPool, tt.topics, 0)
-				})
-			}
-		})
-	}
+	// Set the context.
+	ctx := context.Background()
+
+	// Create a nil database pool.
+	var nilDbPool *pgxpool.Pool
+
+	// Setup the topics.
+	topics := []string{"test"}
+
+	// Test that Subscribe panics when the database pool is nil.
+	assert.PanicsWithValue(t, "pubsub: database pool is nil", func() {
+		Subscribe(ctx, nilDbPool, topics)
+	})
+}
+
+func TestSubscribeWhenTopicIsTooLong(t *testing.T) {
+	t.Parallel()
+
+	// Create a context.
+	ctx := context.Background()
+
+	// Create a database pool for testing.
+	dbPool := databasePoolForTesting(t)
+	defer dbPool.Close()
+
+	// Setup the topics.
+	topics := []string{strings.Repeat("a", 129)}
+
+	// Test that Subscribe panics when the topic is too long.
+	sub, err := Subscribe(ctx, dbPool, topics)
+	assert.Nil(t, sub)
+	assert.ErrorContains(t, err, "pubsub: invalid topic (length >= 128)")
+}
+
+func TestSubscribeWhenLoggerNotSetOnContext(t *testing.T) {
+	t.Parallel()
+
+	// Create a context.
+	ctx := context.Background()
+
+	// Create a database pool for testing.
+	dbPool := databasePoolForTesting(t)
+	defer dbPool.Close()
+
+	// Setup the topics.
+	topics := []string{"test"}
+
+	// Test that Subscribe panics when the logger is not set on the context.
+	sub, err := Subscribe(ctx, dbPool, topics)
+	assert.Nil(t, sub)
+	assert.ErrorIs(t, err, common.ErrLoggerNotSet)
 }
 
 func TestSubscribeWhenAquiringConnectionFails(t *testing.T) {
@@ -231,15 +280,31 @@ func TestSubscribeWhenAquiringConnectionFails(t *testing.T) {
 	deps := &mockDependencies{}
 	deps.On("Acquire", ctx, dbPool).Return(nilConn, expectedErr)
 
+	// Create an error handler that will notify a condition.
+	cond := sync.NewCond(&sync.Mutex{})
+	receivedErr := false
+	errorHandler := func(err error) {
+		cond.L.Lock()
+		defer cond.L.Unlock()
+		assert.ErrorIs(t, err, expectedErr)
+		receivedErr = true
+		cond.Broadcast()
+	}
+
 	// Subscribe to the topic.
 	const topic = "test"
 	topics := []string{topic}
 	subscriptionId := SubscriptionId(uuid.NewString())
-	sub := newSubscription(ctx, dbPool, logger, subscriptionId, 0)
-	go subscribe[TestMessage](sub, topics, deps)
+	sub := newSubscription(ctx, dbPool, logger, subscriptionId, 0, messageTypesForTesting)
+	sub.errorHandler = errorHandler
+	go subscribe(sub, topics, deps)
 
-	// Wait for the error.
-	waitError(t, sub, "pubsub: failed to acquire database connection: expected")
+	// Wait for the error handler to be called.
+	cond.L.Lock()
+	if !receivedErr {
+		cond.Wait()
+	}
+	cond.L.Unlock()
 
 	// Assert that the dependencies were called as expected.
 	deps.AssertExpectations(t)
@@ -277,13 +342,29 @@ func TestSubscribeWhenSubscriptionFails(t *testing.T) {
 	deps.On("Acquire", ctx, dbPool).Once().Return(conn, nil)
 	deps.On("QueryRow", ctx, conn, "SELECT max_message_id FROM pubsub_subscribe($1);", []any{topics}).Once().Return(maxMessageIDRow, nil)
 
+	// Create an error handler that will notify a condition.
+	cond := sync.NewCond(&sync.Mutex{})
+	receivedErr := false
+	errorHandler := func(err error) {
+		cond.L.Lock()
+		defer cond.L.Unlock()
+		assert.ErrorIs(t, err, expectedErr)
+		receivedErr = true
+		cond.Broadcast()
+	}
+
 	// Subscribe to the topic.
 	subscriptionId := SubscriptionId(uuid.NewString())
-	sub := newSubscription(ctx, dbPool, logger, subscriptionId, 0)
-	go subscribe[TestMessage](sub, topics, deps)
+	sub := newSubscription(ctx, dbPool, logger, subscriptionId, 0, messageTypesForTesting)
+	sub.errorHandler = errorHandler
+	go subscribe(sub, topics, deps)
 
-	// Wait for the events.
-	waitError(t, sub, "pubsub: failed to subscribe to topic: expected")
+	// Wait for the error handler to be called.
+	cond.L.Lock()
+	if !receivedErr {
+		cond.Wait()
+	}
+	cond.L.Unlock()
 
 	// Assert that the dependencies were called as expected.
 	deps.AssertExpectations(t)
@@ -325,18 +406,17 @@ func TestSubscribeWhenQueryingForMissedRowsFails(t *testing.T) {
 	var nilRows *mockRows
 	deps := &mockDependencies{}
 	deps.On("Acquire", ctx, dbPool).Once().Return(conn, nil)
-	deps.On("QueryRow", ctx, conn, "SELECT max_message_id FROM pubsub_subscribe($1);", []any{topics}).Once().Return(maxMessageIDRow, nil)
-	deps.On("Query", ctx, conn, "SELECT id, payload, published_at FROM pubsub_messages WHERE topic = ANY($1) AND id > $2 ORDER BY id ASC;", []any{topics, MessageId(1)}).Once().Return(nilRows, expectedErr)
+	deps.On("QueryRow", ctx, conn, `SELECT max_message_id FROM pubsub_subscribe($1);`, []any{topics}).Once().Return(maxMessageIDRow, nil)
+	deps.On("Query", ctx, conn, `SELECT id, topic, "type", payload, published_at FROM pubsub_messages WHERE topic = ANY($1) AND id > $2 ORDER BY id ASC;`, []any{topics, MessageId(1)}).Once().Return(nilRows, expectedErr)
 
 	// Subscribe to the topic.
 	subscriptionId := SubscriptionId(uuid.NewString())
-	sub := newSubscription(ctx, dbPool, logger, subscriptionId, 0)
+	sub := newSubscription(ctx, dbPool, logger, subscriptionId, 0, messageTypesForTesting)
 	sub.maxMessageID = 1
-	go subscribe[TestMessage](sub, topics, deps)
+	go subscribe(sub, topics, deps)
 
 	// Wait for the events.
 	waitSubscribed(t, sub, true)
-	waitError(t, sub, "pubsub: failed to check for missed messages: expected")
 	waitSubscribed(t, sub, false)
 
 	// Assert that the dependencies were called as expected.
@@ -383,25 +463,24 @@ func TestSubscribeWhenScanningMissedRowFails(t *testing.T) {
 
 	deps := &mockDependencies{}
 	deps.On("Acquire", ctx, dbPool).Once().Return(conn, nil)
-	deps.On("QueryRow", ctx, conn, "SELECT max_message_id FROM pubsub_subscribe($1);", []any{topics}).Once().Return(maxMessageIDRow, nil)
-	deps.On("Query", ctx, conn, "SELECT id, payload, published_at FROM pubsub_messages WHERE topic = ANY($1) AND id > $2 ORDER BY id ASC;", []any{topics, MessageId(1)}).Once().Return(missedMessageRows, nil)
+	deps.On("QueryRow", ctx, conn, `SELECT max_message_id FROM pubsub_subscribe($1);`, []any{topics}).Once().Return(maxMessageIDRow, nil)
+	deps.On("Query", ctx, conn, `SELECT id, topic, "type", payload, published_at FROM pubsub_messages WHERE topic = ANY($1) AND id > $2 ORDER BY id ASC;`, []any{topics, MessageId(1)}).Once().Return(missedMessageRows, nil)
 
 	// Subscribe to the topic.
 	subscriptionId := SubscriptionId(uuid.NewString())
-	sub := newSubscription(ctx, dbPool, logger, subscriptionId, 0)
+	sub := newSubscription(ctx, dbPool, logger, subscriptionId, 0, messageTypesForTesting)
 	sub.maxMessageID = 1
-	go subscribe[TestMessage](sub, topics, deps)
+	go subscribe(sub, topics, deps)
 
 	// Wait for the events.
 	waitSubscribed(t, sub, true)
-	waitError(t, sub, "pubsub: failed to read missed message: expected")
 	waitSubscribed(t, sub, false)
 
 	// Assert that the dependencies were called as expected.
 	deps.AssertExpectations(t)
 }
 
-func TestSubscribeWhenUnmarshallingFails(t *testing.T) {
+func TestSubscribeWhenUnmarshallingEnvelopeFails(t *testing.T) {
 	t.Parallel()
 
 	// Create a database pool for testing.
@@ -448,18 +527,85 @@ func TestSubscribeWhenUnmarshallingFails(t *testing.T) {
 
 	// Subscribe to the topic.
 	subscriptionId := SubscriptionId(uuid.NewString())
-	sub := newSubscription(ctx, dbPool, logger, subscriptionId, 0)
+	sub := newSubscription(ctx, dbPool, logger, subscriptionId, 0, messageTypesForTesting)
 	sub.maxMessageID = 1
-	go subscribe[TestMessage](sub, topics, deps)
+	go subscribe(sub, topics, deps)
 
 	// Wait for the events.
 	waitSubscribed(t, sub, true)
-	waitError(t, sub, "pubsub: failed to unmarshal envelope: expected")
-	waitError(t, sub, "pubsub: failed while waiting for message: expected")
 	waitSubscribed(t, sub, false)
 
 	// Assert that the dependencies were called as expected.
 	deps.AssertExpectations(t)
+}
+
+func TestSubscribeWhenUnmarshallingMessageFails(t *testing.T) {
+	t.Parallel()
+
+	// Create a database pool for testing.
+	dbPool := databasePoolForTesting(t)
+	defer dbPool.Close()
+
+	// Create a cancelable context to stop listening.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Add a logger to the context.
+	logger := slogt.New(t)
+	ctx = common.WithLogger(ctx, logger)
+
+	// Create the subscription.
+	expectedErr := errors.New("expected")
+	subscriptionId := SubscriptionId(uuid.NewString())
+	fqn := fullyQualifiedNameFromType[TestMessage]()
+	sub := newSubscription(ctx, dbPool, logger, subscriptionId, 0, map[string]Unmarshaller{
+		fqn: func(payload string) (any, error) {
+			return nil, expectedErr
+		},
+	})
+
+	// Create an error handler that will notify a condition.
+	cond := sync.NewCond(&sync.Mutex{})
+	receivedErr := false
+	errorHandler := func(err error) {
+		if !receivedErr {
+			cond.L.Lock()
+			defer cond.L.Unlock()
+
+			assert.ErrorIs(t, err, expectedErr)
+			receivedErr = true
+			cond.Broadcast()
+		}
+	}
+
+	// Subscribe to the topic.
+	const topic = "test"
+	topics := []string{topic}
+	deps := &standardDependencies{}
+	sub.errorHandler = errorHandler
+	go subscribe(sub, topics, deps)
+
+	// Wait for the events.
+	waitSubscribed(t, sub, true)
+
+	// Publish a message.
+	message := TestMessage{Value: 42}
+	messageId, err := Publish(ctx, dbPool, topic, message)
+	require.NoError(t, err)
+	assert.Greater(t, messageId, int64(0))
+
+	// Assert that the error handler was called.
+	cond.L.Lock()
+	if !receivedErr {
+		cond.Wait()
+	}
+	cond.L.Unlock()
+
+	// Cancel the subscription.
+	cancel()
+
+	// Wait for the subscription to be cancelled.
+	waitSubscribed(t, sub, false)
 }
 
 func TestHandleMessageWhenInvalidPayload(t *testing.T) {
@@ -478,12 +624,16 @@ func TestHandleMessageWhenInvalidPayload(t *testing.T) {
 	ctx = common.WithLogger(ctx, logger)
 
 	// Handle the payload.
+	const topic = "test"
+	const messageId = MessageId(123)
+	const payload = "invalid"
+	messageType := fullyQualifiedNameFromType[TestMessage]()
+	publishedAt := time.Now()
 	subscriptionId := SubscriptionId(uuid.NewString())
-	sub := newSubscription(ctx, dbPool, logger, subscriptionId, 0)
-	go handlePayload[TestMessage](sub, 123, "invalid", time.Now())
-
-	// Wait for the events.
-	waitError(t, sub, "pubsub: failed to unmarshal message: invalid character 'i' looking for beginning of value")
+	sub := newSubscription(ctx, dbPool, logger, subscriptionId, 0, map[string]Unmarshaller{
+		messageType: UnmarshalJSON[TestMessage],
+	})
+	go handlePayload(sub, topic, messageId, messageType, payload, publishedAt)
 }
 
 func TestHandlePanic(t *testing.T) {
@@ -526,16 +676,30 @@ func TestHandlePanic(t *testing.T) {
 	subscriptionId := SubscriptionId(uuid.NewString())
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sub := newSubscription(ctx, dbPool, logger, subscriptionId, 0)
+			sub := newSubscription(ctx, dbPool, logger, subscriptionId, 0, map[string]Unmarshaller{})
 
 			go func() {
 				defer handlePanic(sub)
 				panic(tt.pvalue)
 			}()
-
-			waitError(t, sub, tt.msg)
 		})
 	}
+}
+
+func TestValidateTopicsWhenEmpty(t *testing.T) {
+	t.Parallel()
+
+	topics, err := validateTopics([]string{})
+	require.NoError(t, err)
+	assert.Empty(t, topics)
+}
+
+func TestValidateTopicsWhenWhitespace(t *testing.T) {
+	t.Parallel()
+
+	topics, err := validateTopics([]string{" ", "test1   ", "   test2", " "})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"test1   ", "   test2"}, topics)
 }
 
 func waitSubscribed(t *testing.T, sub *Subscription, expected bool) {
@@ -548,24 +712,13 @@ func waitSubscribed(t *testing.T, sub *Subscription, expected bool) {
 	}
 }
 
-func waitMessage[T any](t *testing.T, sub *Subscription, messageId MessageId, expected T) {
+func waitMessage(t *testing.T, sub *Subscription, messageId MessageId, expected any) {
 	v := <-sub.Events
 	switch event := v.(type) {
-	case MessageEvent[T]:
+	case MessageEvent:
 		assert.Equal(t, sub.Id, event.SubscriptionId)
 		assert.Equal(t, messageId, event.MessageId)
 		assert.Equal(t, expected, event.Message)
-	default:
-		t.Fatalf("unexpected event type: %T", event)
-	}
-}
-
-func waitError(t *testing.T, sub *Subscription, expectedError string) {
-	v := <-sub.Events
-	switch event := v.(type) {
-	case ErrorEvent:
-		assert.Equal(t, sub.Id, event.SubscriptionId)
-		assert.Equal(t, expectedError, event.Error.Error())
 	default:
 		t.Fatalf("unexpected event type: %T", event)
 	}

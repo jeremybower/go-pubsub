@@ -15,7 +15,6 @@ type dependencies interface {
 	Query(ctx context.Context, querier postgres.Querier, sql string, args ...interface{}) (pgx.Rows, error)
 	QueryRow(ctx context.Context, querier postgres.Querier, sql string, args ...interface{}) pgx.Row
 	WaitForNotification(ctx context.Context, conn *pgxpool.Conn) (*pgconn.Notification, error)
-	MarshalStringJSON(v interface{}) (string, error)
 	UnmarshalStringJSON(data string, v interface{}) error
 }
 
@@ -37,11 +36,6 @@ func (sd *standardDependencies) QueryRow(ctx context.Context, querier postgres.Q
 
 func (sd *standardDependencies) WaitForNotification(ctx context.Context, conn *pgxpool.Conn) (*pgconn.Notification, error) {
 	return conn.Conn().WaitForNotification(ctx)
-}
-
-func (sd *standardDependencies) MarshalStringJSON(v interface{}) (string, error) {
-	data, err := json.Marshal(v)
-	return string(data), err
 }
 
 func (sd *standardDependencies) UnmarshalStringJSON(data string, v interface{}) error {
