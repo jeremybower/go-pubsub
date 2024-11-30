@@ -25,6 +25,8 @@ github.com/jackc/puddle/v2 v2.2.2 h1:PR8nw+E/1w0GLuRFSmiioY6UooMp6KJv0/61nB7icHo
 github.com/jackc/puddle/v2 v2.2.2/go.mod h1:vriiEXHvEE654aYKXXjOvZM39qJ0q+azkZFrfEOc3H4=
 github.com/jeremybower/go-common v1.7.1 h1:Pu0PpfMl+8762H2fLZ7yRQ9idB/XKZe0V+Z1Uh4dF/w=
 github.com/jeremybower/go-common v1.7.1/go.mod h1:GeLs+ZC0ZmfL14FhfOZIrS8W26t33aB59zxHJSL0J/Y=
+github.com/jeremybower/go-common v1.8.0 h1:IK/AK+I83q+WQLgi4DY8bnzOIPVy8DWLDRVnsnDUAMQ=
+github.com/jeremybower/go-common v1.8.0/go.mod h1:c1UoOSRsaB+PKs2mxbQtLQxss6hwVkqlUWuyKIy9ExQ=
 github.com/kr/pretty v0.3.0 h1:WgNl7dwNpEZ6jJ9k1snq4pZsg7DOEN8hP9Xw0Tsjwk0=
 github.com/kr/pretty v0.3.0/go.mod h1:640gp4NfQd8pI5XOwp5fnNeVWj67G7CFk/SaSQn7NBk=
 github.com/kr/text v0.2.0 h1:5Nx0Ya0ZqY2ygV366QzturHI13Jq95ApcVaJBhpS+AY=

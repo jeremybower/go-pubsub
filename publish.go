@@ -8,80 +8,61 @@ import (
 	"github.com/jeremybower/go-common/postgres"
 )
 
-type MessageId int64
-
-type publishOptions struct {
-	typeFn     func() string
-	marshaller Marshaller
-}
-
-type publishOption func(opts *publishOptions)
-
-func WithMarshaller(typ string, marshaller Marshaller) publishOption {
-	return func(opts *publishOptions) {
-		opts.marshaller = marshaller
-		opts.typeFn = func() string {
-			return typ
-		}
+func (client *Client) Publish(
+	ctx context.Context,
+	querier postgres.Querier,
+	topicNames []string,
+	value any,
+	encoder Encoder,
+) (*PublishReceipt, error) {
+	// Check that the context is not nil.
+	if ctx == nil {
+		panic("pubsub: context is nil")
 	}
-}
 
-func Publish[T any](
-	ctx context.Context,
-	querier postgres.Querier,
-	topic string,
-	message T,
-	options ...publishOption,
-) (MessageId, error) {
-	return publish(ctx, querier, topic, message, &standardDependencies{}, options...)
-}
+	// Check that the querier is not nil.
+	if querier == nil {
+		panic("pubsub: querier is nil")
+	}
 
-func publish[T any](
-	ctx context.Context,
-	querier postgres.Querier,
-	topic string,
-	message T,
-	deps dependencies,
-	options ...publishOption,
-) (MessageId, error) {
+	// Check that the topics are valid.
+	err := validateTopics(topicNames)
+	if err != nil {
+		return nil, err
+	}
+
+	// Check that value and encoder are either both nil or both not nil.
+	if (value == nil && encoder != nil) || (value != nil && encoder == nil) {
+		panic("pubsub: value and encoder must both be nil or both not nil")
+	}
+
 	// Get the logger from the context.
 	logger, err := common.Logger(ctx)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 
-	// Handle the options.
-	opts := &publishOptions{
-		typeFn:     fullyQualifiedNameFromType[T],
-		marshaller: defaultMarshaller[T],
-	}
-	for _, option := range options {
-		option(opts)
+	// Encode the value.
+	var encodedValue *EncodedValue
+	if value != nil && encoder != nil {
+		encodedValue, err = encoder.Encode(ctx, value)
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	// Marshal the message.
-	typ := opts.typeFn()
-	payload, err := opts.marshaller(message)
+	// Insert the message into the data store.
+	receipt, err := client.dataStore.Publish(ctx, querier, topicNames, value, encodedValue)
 	if err != nil {
-		logger.Error("pubsub: failed to marshal message", slog.Any("error", err))
-		return 0, err
-	}
-
-	// Insert the message into the database.
-	var id MessageId
-	sql := "INSERT INTO pubsub_messages (topic, type, payload) VALUES ($1, $2, $3) RETURNING id;"
-	row := deps.QueryRow(ctx, querier, sql, topic, typ, payload)
-	if err := row.Scan(&id); err != nil {
-		logger.Error("pubsub: failed to publish message", slog.Any("error", err))
-		return 0, err
+		return nil, err
 	}
 
 	// Log that the message was published.
 	logger.Debug("pubsub: published message",
-		slog.String("pubsub:topic", topic),
-		slog.Int64("pubsub:message_id", int64(id)),
+		slog.Int64("pubsub:message_id", int64(receipt.MessageID)),
+		slog.Any("pubsub:topics", topicNames),
 	)
 
-	// Return the message id.
-	return id, nil
+	// Return the receipt.
+	return receipt, nil
 }

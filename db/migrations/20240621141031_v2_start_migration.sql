@@ -1,12 +1,16 @@
 -- migrate:up
-CREATE TABLE pubsub_messages(
-  id bigserial PRIMARY KEY,
-	topic text NOT NULL,
-	payload text NOT NULL,
-	published_at timestamp NOT NULL DEFAULT NOW(),
+DROP FUNCTION pubsub_subscribe;
 
-  CONSTRAINT topic_length CHECK (char_length(topic) > 0 AND char_length(topic) < 128)
-);
+DROP TRIGGER pubsub_messages_notify_trigger ON pubsub_messages;
+
+DROP FUNCTION pubsub_messages_notify_func;
+
+DROP INDEX pubsub_message_topic_idx;
+
+ALTER TABLE pubsub_messages RENAME TO pubsub_messages_v1;
+
+-- migrate:down
+ALTER TABLE pubsub_messages_v1 RENAME TO pubsub_messages;
 
 CREATE INDEX pubsub_message_topic_idx ON pubsub_messages USING btree(topic);
 
@@ -48,14 +52,3 @@ BEGIN
 END;
 $$
 LANGUAGE plpgsql;
-
--- migrate:down
-DROP FUNCTION pubsub_subscribe;
-
-DROP INDEX pubsub_message_topic_idx;
-
-DROP TRIGGER pubsub_messages_notify_trigger ON pubsub_messages;
-
-DROP FUNCTION pubsub_messages_notify_func;
-
-DROP TABLE pubsub_messages;
