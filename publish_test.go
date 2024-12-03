@@ -24,7 +24,7 @@ func TestPublishWhenContextIsNil(t *testing.T) {
 	assert.Panics(t, func() {
 		nilContext := (context.Context)(nil)
 		topicNames := h.GenerateTopicNames(1)
-		h.Client().Publish(nilContext, h.DBPool(), topicNames, nil, nil)
+		Publish(nilContext, h.DBPool(), topicNames, nil, nil)
 	})
 }
 
@@ -38,7 +38,7 @@ func TestPublishWhenQuerierIsNil(t *testing.T) {
 	// Publish the message.
 	assert.Panics(t, func() {
 		topicNames := h.GenerateTopicNames(1)
-		h.Client().Publish(h.Context(), nil, topicNames, nil, nil)
+		Publish(h.Context(), nil, topicNames, nil, nil)
 	})
 }
 
@@ -66,14 +66,14 @@ func TestPublishWhenValueAndEncoderAreNotBothNil(t *testing.T) {
 	// Publish the message.
 	assert.Panics(t, func() {
 		topicNames := h.GenerateTopicNames(1)
-		h.Client().Publish(h.Context(), h.DBPool(), topicNames, nil, NewJSONEncoder())
+		Publish(h.Context(), h.DBPool(), topicNames, nil, NewJSONEncoder())
 	})
 
 	// Publish the message.
 	assert.Panics(t, func() {
 		topicNames := h.GenerateTopicNames(1)
 		value := &TestValue{Value: 42}
-		h.Client().Publish(h.Context(), h.DBPool(), topicNames, value, nil)
+		Publish(h.Context(), h.DBPool(), topicNames, value, nil)
 	})
 }
 
@@ -182,11 +182,8 @@ func TestPublishWhenCommonLoggerNotSetOnContext(t *testing.T) {
 	// Create a context without a logger.
 	ctx := context.Background()
 
-	// Create a client.
-	client := NewClient()
-
 	topicNames := []string{"test"}
-	receipt, err := client.Publish(ctx, dbPool, topicNames, nil, nil)
+	receipt, err := Publish(ctx, dbPool, topicNames, nil, nil)
 	require.ErrorIs(t, err, common.ErrLoggerNotSet)
 	assert.Nil(t, receipt)
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"reflect"
 	"strings"
 	"time"
 
@@ -13,49 +12,22 @@ import (
 	"github.com/jeremybower/go-common/backoff"
 )
 
-type SubscribeOptions struct {
-	bufferSize         int
-	decoders           map[string]Decoder
-	restartAtMessageID MessageID
-}
-
-func defaultSubscribeOptions() *SubscribeOptions {
-	return &SubscribeOptions{
-		decoders: map[string]Decoder{
-			JSONContentType: NewJSONDecoder(),
-		},
-	}
-}
-
-type SubscribeOption func(opts *SubscribeOptions)
-
-func WithBufferSize(bufferSize int) SubscribeOption {
-	return func(options *SubscribeOptions) {
-		options.bufferSize = bufferSize
-	}
-}
-
-func WithRestartAtMessageID(restartAtMessageID MessageID) SubscribeOption {
-	return func(options *SubscribeOptions) {
-		options.restartAtMessageID = restartAtMessageID
-	}
-}
-
-func WithJSONDecoder(types ...reflect.Type) SubscribeOption {
-	return WithDecoder(NewJSONDecoder(types...))
-}
-
-func WithDecoder(decoder Decoder) SubscribeOption {
-	return func(options *SubscribeOptions) {
-		options.decoders[decoder.ContentType()] = decoder
-	}
-}
-
-func (client *Client) Subscribe(
+func Subscribe(
 	ctx context.Context,
 	dbPool *pgxpool.Pool,
 	topics []string,
-	opts ...SubscribeOption,
+	decoders ...Decoder,
+) (*Subscription, error) {
+	dataStore := NewPostgresDataStore()
+	return subscribe(dataStore, ctx, dbPool, topics, decoders...)
+}
+
+func subscribe(
+	dataStore DataStore,
+	ctx context.Context,
+	dbPool *pgxpool.Pool,
+	topics []string,
+	decoders ...Decoder,
 ) (*Subscription, error) {
 	// Check that the context is not nil.
 	if ctx == nil {
@@ -73,17 +45,11 @@ func (client *Client) Subscribe(
 		return nil, err
 	}
 
-	// Create the subscription options.
-	options := defaultSubscribeOptions()
-	for _, opt := range opts {
-		opt(options)
-	}
-
 	// Create a context that is cancelled when the subscription is closed.
 	ctx, cancel := context.WithCancel(ctx)
 
 	// Create the subscription.
-	sub := newSubscription(client, dbPool, cancel, options)
+	sub := newSubscription(dbPool, cancel, dataStore, decoders...)
 
 	// Get the context's logger.
 	logger, err := common.Logger(ctx)

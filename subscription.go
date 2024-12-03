@@ -19,8 +19,8 @@ import (
 
 type Subscription struct {
 	cancel             context.CancelFunc
-	client             *Client
 	closed             bool
+	dataStore          DataStore
 	dbPool             *pgxpool.Pool
 	decoders           map[string]Decoder
 	events             []any
@@ -39,10 +39,10 @@ type messageHandler func(ctx context.Context, logger *slog.Logger, topic Topic, 
 type subscribedHandler func(ctx context.Context, logger *slog.Logger, subscribed bool)
 
 func newSubscription(
-	client *Client,
 	dbPool *pgxpool.Pool,
 	cancel context.CancelFunc,
-	options *SubscribeOptions,
+	dataStore DataStore,
+	ds ...Decoder,
 ) *Subscription {
 	// Replace a nil cancel function with a no-op function.
 	if cancel == nil {
@@ -52,19 +52,24 @@ func newSubscription(
 	// Share the mutex with condition variables.
 	mutex := &sync.Mutex{}
 
+	// Setup the decoders.
+	decoders := make(map[string]Decoder)
+	for _, d := range ds {
+		decoders[d.ContentType()] = d
+	}
+
 	// Create the subscription.
 	sub := &Subscription{
-		cancel:             cancel,
-		client:             client,
-		dbPool:             dbPool,
-		decoders:           options.decoders,
-		events:             make([]any, 0, 10),
-		eventsCond:         sync.NewCond(mutex),
-		id:                 SubscriptionID(uuid.NewString()),
-		mutex:              mutex,
-		restartAtMessageID: options.restartAtMessageID,
-		statusCond:         sync.NewCond(mutex),
-		topicCache:         newCache[TopicID, Topic](),
+		cancel:     cancel,
+		dataStore:  dataStore,
+		dbPool:     dbPool,
+		decoders:   decoders,
+		events:     make([]any, 0, 10),
+		eventsCond: sync.NewCond(mutex),
+		id:         SubscriptionID(uuid.NewString()),
+		mutex:      mutex,
+		statusCond: sync.NewCond(mutex),
+		topicCache: newCache[TopicID, Topic](),
 	}
 
 	// Return the subscription.
@@ -111,11 +116,16 @@ func (sub *Subscription) Event() any {
 	return nil
 }
 
-func (sub *Subscription) WaitForEvent(ctx context.Context) (any, error) {
+func (sub *Subscription) WaitForEvent(ctx context.Context, waiting ...chan bool) (any, error) {
 	// If there is an event in the queue, then return it immediately.
 	event := sub.Event()
 	if event != nil {
 		return event, nil
+	}
+
+	// Check for a waiting channel to notify when it will block.
+	if len(waiting) > 0 {
+		waiting[0] <- true
 	}
 
 	// Create a channel to notify when an event is queued.
@@ -324,7 +334,7 @@ func (sub *Subscription) handleMessageNotification(
 	// Check for an encoded value.
 	var encodedValue *EncodedValue
 	if notification.HasValue {
-		encodedValue, err = sub.client.dataStore.ReadEncodedValue(ctx, sub.dbPool, notification.MessageID)
+		encodedValue, err = sub.dataStore.ReadEncodedValue(ctx, sub.dbPool, notification.MessageID)
 		if err != nil {
 			logger.Error("pubsub: failed to read encoded value", slog.Any("error", err))
 			return nil, errorHandler(ctx, logger, err)
@@ -383,7 +393,7 @@ func (sub *Subscription) subscribe(
 ) error {
 	// Acquire a connection to the database from the pool.
 	logger.Debug("pubsub: acquiring database connection")
-	conn, err := sub.client.dataStore.AcquireConnection(ctx, sub.dbPool)
+	conn, err := sub.dataStore.AcquireConnection(ctx, sub.dbPool)
 	if err != nil {
 		logger.Error("pubsub: failed to acquire database connection", slog.Any("error", err))
 		return errorHandler(ctx, logger, err)
@@ -405,7 +415,7 @@ func (sub *Subscription) subscribe(
 	// If the subscription is restarted after a connection error, then the max
 	// message ID will be the last message ID that was processed before the
 	// connection was lost.
-	receipt, err := sub.client.dataStore.Subscribe(ctx, conn, topics)
+	receipt, err := sub.dataStore.Subscribe(ctx, conn, topics)
 	if err != nil {
 		logger.Error("pubsub: failed to subscribe to topic", slog.Any("error", err))
 		return errorHandler(ctx, logger, err)
@@ -437,7 +447,7 @@ func (sub *Subscription) subscribe(
 		logger.Debug("pubsub: checking for missed messages")
 
 		// Query for missed messages.
-		ch, err := sub.client.dataStore.ReadEncodedMessagesAfterID(ctx, conn, sub.restartAtMessageID, topics)
+		ch, err := sub.dataStore.ReadEncodedMessagesAfterID(ctx, conn, sub.restartAtMessageID, topics)
 		if err != nil {
 			logger.Error("pubsub: failed to check for missed messages", slog.Any("error", err))
 			return errorHandler(ctx, logger, err)
@@ -478,7 +488,7 @@ func (sub *Subscription) subscribe(
 	// connection error occurs.
 	for {
 		// Wait for a notification, or for the context to be cancelled.
-		notification, err := sub.client.dataStore.WaitForNotification(ctx, conn)
+		notification, err := sub.dataStore.WaitForNotification(ctx, conn)
 		if err != nil {
 			logger.Error("pubsub: failed to wait for notification", slog.Any("error", err))
 			return errorHandler(ctx, logger, err)
@@ -497,7 +507,7 @@ func (sub *Subscription) handleNotification(
 	errorHandler errorHandler,
 ) error {
 	// Unmarshal the message notification payload.
-	notification, err := sub.client.dataStore.UnmarshalMessageNotification(n.Payload)
+	notification, err := sub.dataStore.UnmarshalMessageNotification(n.Payload)
 	if err != nil {
 		// Report the payload error, but continue handling messages.
 		logger.Error("pubsub: failed to unmarshal message notification", slog.Any("error", err))

@@ -12,14 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSubscribeOptionsWithBufferSize(t *testing.T) {
-	t.Parallel()
-
-	opts := defaultSubscribeOptions()
-	WithBufferSize(10)(opts)
-	assert.Equal(t, 10, opts.bufferSize)
-}
-
 func TestSubscribeWhenContextIsNil(t *testing.T) {
 	t.Parallel()
 
@@ -35,8 +27,7 @@ func TestSubscribeWhenContextIsNil(t *testing.T) {
 
 	// Test that Subscribe panics when the context is nil.
 	assert.PanicsWithValue(t, "pubsub: context is nil", func() {
-		client := NewClient()
-		client.Subscribe(nilCtx, dbPool, topics)
+		Subscribe(nilCtx, dbPool, topics)
 	})
 }
 
@@ -54,8 +45,7 @@ func TestSubscribeWhenDatabasePoolIsNil(t *testing.T) {
 
 	// Test that Subscribe panics when the database pool is nil.
 	assert.PanicsWithValue(t, "pubsub: database pool is nil", func() {
-		client := NewClient()
-		client.Subscribe(ctx, nilDbPool, topics)
+		Subscribe(ctx, nilDbPool, topics)
 	})
 }
 
@@ -68,7 +58,7 @@ func TestSubscribe(t *testing.T) {
 
 	// Subscribe to a topic.
 	topicNames := h.GenerateTopicNames(1)
-	sub := h.Subscribe(topicNames, WithJSONDecoder(reflect.TypeOf(TestValue{})))
+	sub := h.Subscribe(topicNames, NewJSONDecoder(reflect.TypeOf(TestValue{})))
 	defer sub.Close()
 
 	// Wait until subscribed before publishing.
@@ -99,7 +89,7 @@ func TestSubscribeWhenTopicValidationFails(t *testing.T) {
 
 	// Subscribe to an invalid topic.
 	topicNames := []string{""}
-	h.SubscribeExpectingError(ErrTopicValidation, topicNames, WithJSONDecoder(reflect.TypeOf(TestValue{})))
+	h.SubscribeExpectingError(ErrTopicValidation, topicNames, NewJSONDecoder(reflect.TypeOf(TestValue{})))
 }
 
 func TestSubscribeExcludesOtherTopics(t *testing.T) {
@@ -111,7 +101,7 @@ func TestSubscribeExcludesOtherTopics(t *testing.T) {
 
 	// Subscribe to a topic.
 	topicNames := h.GenerateTopicNames(1)
-	sub := h.Subscribe(topicNames, WithJSONDecoder(reflect.TypeOf(TestValue{})))
+	sub := h.Subscribe(topicNames, NewJSONDecoder(reflect.TypeOf(TestValue{})))
 	defer sub.Close()
 
 	// Wait until subscribed before publishing.
@@ -149,9 +139,9 @@ func TestSubscribeWhenMissedMessages(t *testing.T) {
 	// Subscribe to a topic.
 	sub := h.Subscribe(
 		topicNames,
-		WithJSONDecoder(reflect.TypeOf(TestValue{})),
-		WithRestartAtMessageID(restartAtMessageID),
+		NewJSONDecoder(reflect.TypeOf(TestValue{})),
 	)
+	sub.restartAtMessageID = restartAtMessageID
 	defer sub.Close()
 
 	// Assert the events.
@@ -182,8 +172,7 @@ func TestSubscribeWhenLoggerNotSetOnContext(t *testing.T) {
 	topics := []string{"test"}
 
 	// Test that Subscribe panics when the logger is not set on the context.
-	client := NewClient()
-	sub, err := client.Subscribe(ctx, dbPool, topics)
+	sub, err := Subscribe(ctx, dbPool, topics)
 	assert.Nil(t, sub)
 	assert.ErrorIs(t, err, common.ErrLoggerNotSet)
 }
@@ -197,7 +186,7 @@ func TestSubscribeWhenStoppedAfterSubscribed(t *testing.T) {
 
 	// Subscribe to a topic.
 	topicNames := h.GenerateTopicNames(1)
-	sub := h.Subscribe(topicNames, WithJSONDecoder(reflect.TypeOf(TestValue{})))
+	sub := h.Subscribe(topicNames, NewJSONDecoder(reflect.TypeOf(TestValue{})))
 	defer sub.Close()
 
 	// Wait until subscribed before publishing.
@@ -235,7 +224,7 @@ func TestSubscribeWhenSubscriptionDelayed(t *testing.T) {
 
 	// Subscribe to a topic.
 	topicNames := h.GenerateTopicNames(1)
-	sub := h.Subscribe(topicNames, WithJSONDecoder(reflect.TypeOf(TestValue{})))
+	sub := h.Subscribe(topicNames, NewJSONDecoder(reflect.TypeOf(TestValue{})))
 	defer sub.Close()
 
 	// Assert the events.
@@ -259,7 +248,7 @@ func TestSubscribeWhenSubscriptionCancelled(t *testing.T) {
 	// Subscribe to a topic.
 	ctx, cancel := context.WithCancel(h.Context())
 	topicNames := h.GenerateTopicNames(1)
-	sub, err := h.Client().Subscribe(ctx, h.DBPool(), topicNames, WithJSONDecoder(reflect.TypeOf(TestValue{})))
+	sub, err := Subscribe(ctx, h.DBPool(), topicNames, NewJSONDecoder(reflect.TypeOf(TestValue{})))
 	require.NoError(t, err)
 	defer sub.Close()
 

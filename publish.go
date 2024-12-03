@@ -8,7 +8,19 @@ import (
 	"github.com/jeremybower/go-common/postgres"
 )
 
-func (client *Client) Publish(
+func Publish(
+	ctx context.Context,
+	querier postgres.Querier,
+	topicNames []string,
+	value any,
+	encoder Encoder,
+) (*PublishReceipt, error) {
+	dataStore := NewPostgresDataStore()
+	return publish(dataStore, ctx, querier, topicNames, value, encoder)
+}
+
+func publish(
+	dataStore DataStore,
 	ctx context.Context,
 	querier postgres.Querier,
 	topicNames []string,
@@ -52,7 +64,7 @@ func (client *Client) Publish(
 	}
 
 	// Insert the message into the data store.
-	receipt, err := client.dataStore.Publish(ctx, querier, topicNames, value, encodedValue)
+	receipt, err := dataStore.Publish(ctx, querier, topicNames, value, encodedValue)
 	if err != nil {
 		return nil, err
 	}

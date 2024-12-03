@@ -30,7 +30,6 @@ type TestHarness struct {
 	t         testing.TB
 	context   context.Context
 	cancel    context.CancelFunc
-	client    *Client
 	closed    bool
 	dataStore DataStore
 	dbPool    *pgxpool.Pool
@@ -45,23 +44,17 @@ func NewTestHarness(
 	logger := slogt.New(t)
 	ctx := common.WithLogger(context.Background(), logger)
 	ctx, cancel := context.WithCancel(ctx)
-	client := NewClient(WithDataStore(dataStore))
 	dbPool := databasePoolForTesting(t)
 
 	return &TestHarness{
 		t:         t,
 		context:   ctx,
 		cancel:    cancel,
-		client:    client,
 		closed:    false,
 		dataStore: dataStore,
 		dbPool:    dbPool,
 		logger:    logger,
 	}
-}
-
-func (h *TestHarness) Client() *Client {
-	return h.client
 }
 
 func (h *TestHarness) Close() {
@@ -138,7 +131,7 @@ func (h *TestHarness) Publish(
 	v any,
 	encoder Encoder,
 ) *PublishReceipt {
-	receipt, err := h.client.Publish(h.context, h.dbPool, topicNames, v, encoder)
+	receipt, err := publish(h.dataStore, h.context, h.dbPool, topicNames, v, encoder)
 	require.NotNil(h.t, receipt)
 	require.NoError(h.t, err)
 	return receipt
@@ -162,7 +155,7 @@ func (h *TestHarness) PublishExpectingError(
 	v any,
 	encoder Encoder,
 ) {
-	receipt, err := h.client.Publish(h.context, h.dbPool, topicNames, v, encoder)
+	receipt, err := publish(h.dataStore, h.context, h.dbPool, topicNames, v, encoder)
 	require.Nil(h.t, receipt)
 	require.ErrorIs(h.t, err, expectedErr)
 }
@@ -179,9 +172,9 @@ func (h *TestHarness) SortEncodedMessages(m []EncodedMessage) {
 
 func (h *TestHarness) Subscribe(
 	topicNames []string,
-	opts ...SubscribeOption,
+	decoders ...Decoder,
 ) *Subscription {
-	sub, err := h.client.Subscribe(h.context, h.dbPool, topicNames, opts...)
+	sub, err := subscribe(h.dataStore, h.context, h.dbPool, topicNames, decoders...)
 	require.NotNil(h.t, sub)
 	require.NoError(h.t, err)
 	return sub
@@ -190,9 +183,9 @@ func (h *TestHarness) Subscribe(
 func (h *TestHarness) SubscribeExpectingError(
 	expectedErr error,
 	topicNames []string,
-	opts ...SubscribeOption,
+	decoders ...Decoder,
 ) {
-	sub, err := h.client.Subscribe(h.context, h.dbPool, topicNames, opts...)
+	sub, err := subscribe(h.dataStore, h.context, h.dbPool, topicNames, decoders...)
 	require.Nil(h.t, sub)
 	require.ErrorIs(h.t, err, expectedErr)
 }

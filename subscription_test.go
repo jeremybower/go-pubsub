@@ -32,7 +32,7 @@ func TestSubscriptionEvent(t *testing.T) {
 	defer h.Close()
 
 	// Create the subscription.
-	sub := newSubscription(h.client, h.dbPool, nil, defaultSubscribeOptions())
+	sub := newSubscription(h.dbPool, nil, NewPostgresDataStore(), NewJSONDecoder())
 	defer sub.Close()
 
 	// Generate a subscribed event.
@@ -46,7 +46,7 @@ func TestSubscriptionEvent(t *testing.T) {
 	}, event)
 }
 
-func TestSubscriptionWaitForEvent(t *testing.T) {
+func TestSubscriptionWaitForEventWhenImmediate(t *testing.T) {
 	t.Parallel()
 
 	// Create a test harness.
@@ -54,7 +54,7 @@ func TestSubscriptionWaitForEvent(t *testing.T) {
 	defer h.Close()
 
 	// Create the subscription.
-	sub := newSubscription(h.client, h.dbPool, nil, defaultSubscribeOptions())
+	sub := newSubscription(h.dbPool, nil, NewPostgresDataStore(), NewJSONDecoder())
 	defer sub.Close()
 
 	// Generate a subscribed event.
@@ -69,6 +69,36 @@ func TestSubscriptionWaitForEvent(t *testing.T) {
 	}, event)
 }
 
+func TestSubscriptionWaitForEventWhenBlocks(t *testing.T) {
+	t.Parallel()
+
+	// Create a test harness.
+	h := NewTestHarness(t, NewPostgresDataStore())
+	defer h.Close()
+
+	// Create the subscription.
+	sub := newSubscription(h.dbPool, nil, NewPostgresDataStore(), NewJSONDecoder())
+	defer sub.Close()
+
+	// Get the event.
+	waiting := make(chan bool)
+	completed := make(chan bool)
+	go func() {
+		event, err := sub.WaitForEvent(h.Context(), waiting)
+		assert.NoError(t, err)
+		assert.Equal(t, StatusEvent{
+			SubscriptionID: sub.id,
+			Subscribed:     optional.NewValue(true),
+		}, event)
+		completed <- true
+	}()
+
+	// Generate a subscribed event.
+	<-waiting
+	sub.handleSubscribed(h.Context(), h.Logger(), true)
+	<-completed
+}
+
 func TestSubscriptionWaitUntilSubscribed(t *testing.T) {
 	t.Parallel()
 
@@ -77,7 +107,7 @@ func TestSubscriptionWaitUntilSubscribed(t *testing.T) {
 	defer h.Close()
 
 	// Create the subscription.
-	sub := newSubscription(h.client, h.dbPool, nil, defaultSubscribeOptions())
+	sub := newSubscription(h.dbPool, nil, NewPostgresDataStore(), NewJSONDecoder())
 	defer sub.Close()
 
 	// Generate a subscribed event.
@@ -95,7 +125,7 @@ func TestSubscriptionWaitUntilSubscribedWhenContextIsCancelled(t *testing.T) {
 	defer h.Close()
 
 	// Create the subscription.
-	sub := newSubscription(h.client, h.dbPool, nil, defaultSubscribeOptions())
+	sub := newSubscription(h.dbPool, nil, NewPostgresDataStore(), NewJSONDecoder())
 	defer sub.Close()
 
 	// Create a context that is cancelled.
@@ -115,11 +145,12 @@ func TestSubscriptionHandleEncodedMessage(t *testing.T) {
 	defer h.Close()
 
 	// Create the subscription.
-	options := defaultSubscribeOptions()
-	options.decoders = map[string]Decoder{
-		JSONContentType: NewJSONDecoder(reflect.TypeOf(TestValue{})),
-	}
-	sub := newSubscription(h.client, h.dbPool, nil, options)
+	sub := newSubscription(
+		h.dbPool,
+		nil,
+		NewPostgresDataStore(),
+		NewJSONDecoder(reflect.TypeOf(TestValue{})),
+	)
 	defer sub.Close()
 	// Create an encoded value.
 	value := &TestValue{Value: 42}
@@ -155,11 +186,12 @@ func TestSubscriptionHandleEncodedMessageWhenEncodedValueIsNil(t *testing.T) {
 	defer h.Close()
 
 	// Create the subscription.
-	options := defaultSubscribeOptions()
-	options.decoders = map[string]Decoder{
-		JSONContentType: NewJSONDecoder(reflect.TypeOf(TestValue{})),
-	}
-	sub := newSubscription(h.client, h.dbPool, nil, options)
+	sub := newSubscription(
+		h.dbPool,
+		nil,
+		NewPostgresDataStore(),
+		NewJSONDecoder(reflect.TypeOf(TestValue{})),
+	)
 	defer sub.Close()
 
 	// Create an encoded message.
@@ -190,11 +222,12 @@ func TestSubscriptionHandleEncodedMessageWhenContentTypeIsInvalid(t *testing.T) 
 	defer h.Close()
 
 	// Create the subscription.
-	options := defaultSubscribeOptions()
-	options.decoders = map[string]Decoder{
-		JSONContentType: NewJSONDecoder(reflect.TypeOf(TestValue{})),
-	}
-	sub := newSubscription(h.client, h.dbPool, nil, options)
+	sub := newSubscription(
+		h.dbPool,
+		nil,
+		NewPostgresDataStore(),
+		NewJSONDecoder(reflect.TypeOf(TestValue{})),
+	)
 	defer sub.Close()
 
 	// Create an encoded value.
@@ -229,9 +262,7 @@ func TestSubscriptionHandleEncodedMessageWhenDecoderNotRegistered(t *testing.T) 
 	defer h.Close()
 
 	// Create the subscription.
-	options := defaultSubscribeOptions()
-	options.decoders = map[string]Decoder{}
-	sub := newSubscription(h.client, h.dbPool, nil, options)
+	sub := newSubscription(h.dbPool, nil, NewPostgresDataStore())
 	defer sub.Close()
 
 	// Create an encoded value.
@@ -266,12 +297,14 @@ func TestSubscriptionHandleEncodedMessageWhenDecoderUnknownType(t *testing.T) {
 	defer h.Close()
 
 	// Create the subscription.
-	options := defaultSubscribeOptions()
-	options.decoders = map[string]Decoder{
-		JSONContentType: NewJSONDecoder(),
-	}
-	sub := newSubscription(h.client, h.dbPool, nil, options)
+	sub := newSubscription(
+		h.dbPool,
+		nil,
+		NewPostgresDataStore(),
+		NewJSONDecoder(),
+	)
 	defer sub.Close()
+
 	// Create an encoded value.
 	value := &TestValue{Value: 42}
 	encodedValue, err := NewJSONEncoder().Encode(h.Context(), value)
@@ -304,11 +337,12 @@ func TestSubscriptionHandleError(t *testing.T) {
 	defer h.Close()
 
 	// Create the subscription.
-	options := defaultSubscribeOptions()
-	options.decoders = map[string]Decoder{
-		JSONContentType: NewJSONDecoder(),
-	}
-	sub := newSubscription(h.client, h.dbPool, nil, options)
+	sub := newSubscription(
+		h.dbPool,
+		nil,
+		NewPostgresDataStore(),
+		NewJSONDecoder(),
+	)
 	defer sub.Close()
 
 	// Handle the error.
@@ -327,12 +361,14 @@ func TestSubscriptionHandleMessageNotification(t *testing.T) {
 	defer h.Close()
 
 	// Create the subscription.
-	options := defaultSubscribeOptions()
-	options.decoders = map[string]Decoder{
-		JSONContentType: NewJSONDecoder(reflect.TypeOf(TestValue{})),
-	}
-	sub := newSubscription(h.client, h.dbPool, nil, options)
+	sub := newSubscription(
+		h.dbPool,
+		nil,
+		NewPostgresDataStore(),
+		NewJSONDecoder(reflect.TypeOf(TestValue{})),
+	)
 	defer sub.Close()
+
 	// Register a topic.
 	topicName := "test"
 	sub.topicCache.set(TopicID(1), Topic{ID: TopicID(1), Name: topicName})
@@ -366,11 +402,12 @@ func TestSubscriptionHandleMessageNotificationWhenTopicUnknown(t *testing.T) {
 	defer h.Close()
 
 	// Create the subscription.
-	options := defaultSubscribeOptions()
-	options.decoders = map[string]Decoder{
-		JSONContentType: NewJSONDecoder(reflect.TypeOf(TestValue{})),
-	}
-	sub := newSubscription(h.client, h.dbPool, nil, options)
+	sub := newSubscription(
+		h.dbPool,
+		nil,
+		NewPostgresDataStore(),
+		NewJSONDecoder(reflect.TypeOf(TestValue{})),
+	)
 	defer sub.Close()
 
 	// Create a notification.
@@ -409,8 +446,11 @@ func TestSubscriptionHandleMessageNotificationWhenReadEncodedValueFails(t *testi
 	defer h.Close()
 
 	// Create the subscription.
-	options := defaultSubscribeOptions()
-	sub := newSubscription(h.client, h.dbPool, nil, options)
+	sub := newSubscription(
+		h.dbPool,
+		nil,
+		mockDataStore,
+	)
 	defer sub.Close()
 
 	// Register a topic.
@@ -456,9 +496,9 @@ func TestSubscriptionSubscribeWhenDataStoreAcquireConnectionFails(t *testing.T) 
 	mockDataStore.On("AcquireConnection", mock.Anything, mock.Anything).Once().Return(nilConnection, assert.AnError)
 
 	// Create the subscription.
-	options := defaultSubscribeOptions()
-	sub := newSubscription(h.client, h.dbPool, nil, options)
+	sub := newSubscription(h.dbPool, nil, mockDataStore)
 	defer sub.Close()
+
 	// Subscribe to the topic.
 	topicName := "test"
 	err := sub.subscribe(
@@ -497,8 +537,7 @@ func TestSubscriptionSubscribeWhenDataStoreSubscribeFails(t *testing.T) {
 	mockDataStore.On("Subscribe", mock.Anything, mock.Anything, mock.Anything).Once().Return(nilReceipt, assert.AnError)
 
 	// Create the subscription.
-	options := defaultSubscribeOptions()
-	sub := newSubscription(h.client, h.dbPool, nil, options)
+	sub := newSubscription(h.dbPool, nil, mockDataStore)
 	defer sub.Close()
 
 	// Subscribe to the topic.
@@ -549,9 +588,8 @@ func TestSubscriptionSubscribeWhenDataStoreReadEncodedMessagesAfterIDFails(t *te
 	mockDataStore.On("ReadEncodedMessagesAfterID", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Once().Return(nilChannel, assert.AnError)
 
 	// Create the subscription.
-	options := defaultSubscribeOptions()
-	options.restartAtMessageID = 1
-	sub := newSubscription(h.client, h.dbPool, nil, options)
+	sub := newSubscription(h.dbPool, nil, mockDataStore)
+	sub.restartAtMessageID = 1
 	defer sub.Close()
 
 	// Subscribe to the topic.
@@ -607,9 +645,8 @@ func TestSubscriptionSubscribeWhenDataStoreReadEncodedMessagesChannelFails(t *te
 	mockDataStore.On("ReadEncodedMessagesAfterID", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Once().Return(ch, nil)
 
 	// Create the subscription.
-	options := defaultSubscribeOptions()
-	options.restartAtMessageID = 1
-	sub := newSubscription(h.client, h.dbPool, nil, options)
+	sub := newSubscription(h.dbPool, nil, mockDataStore)
+	sub.restartAtMessageID = 1
 	defer sub.Close()
 
 	// Subscribe to the topic.
@@ -663,8 +700,7 @@ func TestSubscriptionSubscribeWhenDataStoreWaitForNotificationFails(t *testing.T
 	mockDataStore.On("WaitForNotification", mock.Anything, mock.Anything).Once().Return(nilNotification, assert.AnError)
 
 	// Create the subscription.
-	options := defaultSubscribeOptions()
-	sub := newSubscription(h.client, h.dbPool, nil, options)
+	sub := newSubscription(h.dbPool, nil, mockDataStore)
 	defer sub.Close()
 
 	// Subscribe to the topic.
@@ -695,8 +731,7 @@ func TestSubscriptionSubscribeWhenCancelled(t *testing.T) {
 	defer h.Close()
 
 	// Create the subscription.
-	options := defaultSubscribeOptions()
-	sub := newSubscription(h.client, h.dbPool, nil, options)
+	sub := newSubscription(h.dbPool, nil, NewPostgresDataStore())
 	defer sub.Close()
 
 	// Create a context to cancel.
@@ -731,8 +766,7 @@ func TestSubscriptionSubscribeWhenClosed(t *testing.T) {
 	ctx, cancel := context.WithCancel(h.Context())
 
 	// Create the subscription.
-	options := defaultSubscribeOptions()
-	sub := newSubscription(h.client, h.dbPool, cancel, options)
+	sub := newSubscription(h.dbPool, cancel, NewPostgresDataStore())
 	defer sub.Close()
 
 	// Subscribe to the topic.
@@ -769,8 +803,7 @@ func TestSubscriptionHandleNotificationWhenUnmarshalMessageNotificationFails(t *
 	mockDataStore.On("UnmarshalMessageNotification", mock.Anything).Once().Return(nilNotification, assert.AnError)
 
 	// Create the subscription.
-	options := defaultSubscribeOptions()
-	sub := newSubscription(h.client, h.dbPool, nil, options)
+	sub := newSubscription(h.dbPool, nil, mockDataStore)
 	defer sub.Close()
 	// Create the notification.
 	n := &pgconn.Notification{
