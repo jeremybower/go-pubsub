@@ -78,7 +78,7 @@ func (sd *PostgresDataStore) ReadEncodedMessagesAfterID(
 	const sql = `SELECT
 			"pubsub_messages"."id",
 			"pubsub_topics"."id" AS "topic_id",
-			"pubsub_topics"."topic",
+			"pubsub_topics"."name" AS "topic_name",
 			"pubsub_message_values"."content_type",
 			"pubsub_message_values"."bytes",
 			"pubsub_messages"."published_at"
@@ -89,7 +89,7 @@ func (sd *PostgresDataStore) ReadEncodedMessagesAfterID(
 			LEFT OUTER JOIN "pubsub_message_values" ON "pubsub_messages"."id" = "pubsub_message_values"."message_id"
 		WHERE
 			"pubsub_messages"."id" > $1 AND
-			"pubsub_topics"."topic" = ANY($2)
+			"pubsub_topics"."name" = ANY($2)
 		ORDER BY "pubsub_messages"."id" ASC;`
 
 	rows, err := querier.Query(ctx, sql, messageID, topics)
@@ -108,7 +108,7 @@ func (sd *PostgresDataStore) ReadEncodedMessagesWithID(
 	const sql = `SELECT
 			"pubsub_messages"."id",
 			"pubsub_topics"."id" AS "topic_id",
-			"pubsub_topics"."topic",
+			"pubsub_topics"."name" AS "topic_name",
 			"pubsub_message_values"."content_type",
 			"pubsub_message_values"."bytes",
 			"pubsub_messages"."published_at"

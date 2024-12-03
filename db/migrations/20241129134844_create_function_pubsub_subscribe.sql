@@ -1,6 +1,6 @@
 -- migrate:up
 CREATE FUNCTION pubsub_subscribe(
-  _topics text[]
+  _topic_names text[]
 ) RETURNS TABLE(
 	max_message_id bigint,
 	topic_ids     bigint[]
@@ -8,12 +8,12 @@ CREATE FUNCTION pubsub_subscribe(
 DECLARE
 	_channel text;
 	_max_message_id bigint;
-	_topic text;
+	_topic_name text;
 	_topic_id bigint;
 	_topic_ids bigint[];
 BEGIN
 	-- If there are no topics, raise an exception.
-	IF _topics IS NULL OR array_length(_topics, 1) IS NULL THEN
+	IF _topic_names IS NULL OR array_length(_topic_names, 1) IS NULL THEN
 		RAISE EXCEPTION 'pubsub: subscribed with no topics';
 	END IF;
 
@@ -26,10 +26,10 @@ BEGIN
 	-- so that the client can associate the index of each topic name
 	-- with the corresponding topic id.
 	_topic_ids = array[]::bigint[];
-	FOREACH _topic IN ARRAY _topics LOOP
+	FOREACH _topic_name IN ARRAY _topic_names LOOP
 		-- Insert the topic if it doesn't exist.
-		INSERT INTO pubsub_topics (topic)
-		VALUES (_topic)
+		INSERT INTO pubsub_topics ("name")
+		VALUES (_topic_name)
 		ON CONFLICT DO NOTHING
 		RETURNING id INTO _topic_id;
 
@@ -37,10 +37,10 @@ BEGIN
 		IF _topic_id IS NULL THEN
 			SELECT id INTO _topic_id
 			FROM pubsub_topics AS topics
-			WHERE topics.topic = _topic;
+			WHERE topics.name = _topic_name;
 
 			IF NOT FOUND THEN
-				RAISE EXCEPTION 'pubsub: topic "%" not found', _topic;
+				RAISE EXCEPTION 'pubsub: topic "%" not found', _topic_name;
 			END IF;
 		END IF;
 

@@ -37,7 +37,8 @@ test: | _include_env
 		-o coverage/coverage.html
 
 	@echo "Dropping test databases..."
-	@set -e; for dbname in $$(psql "${DATABASE_URL}" -c "copy (select datname from pg_database where datname like 'test-%') to stdout") ; do \
+	@set -e; for dbname in $$(psql "${DATABASE_URL}" -t -A -c "SELECT datname FROM pg_database WHERE datname LIKE 'test-%'" | cat) ; do \
+		echo "$$dbname"; \
 		psql "${DATABASE_URL}" -q -c "DROP DATABASE \"$$dbname\"" ; \
 	done
 

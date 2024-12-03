@@ -1,6 +1,6 @@
 -- migrate:up
 CREATE FUNCTION pubsub_publish(
-  _topics       text[],
+  _topic_names  text[],
 	_content_type text,
   _bytes        bytea
 ) RETURNS TABLE(
@@ -14,12 +14,12 @@ DECLARE
 	_notification text;
 	_message_id   bigint;
 	_published_at timestamp;
-	_topic        text;
+	_topic_name   text;
 	_topic_id     bigint;
 	_topic_ids    bigint[];
 BEGIN
 	-- There must be at least one topic.
-	IF _topics IS NULL OR array_length(_topics, 1) IS NULL THEN
+	IF _topic_names IS NULL OR array_length(_topic_names, 1) IS NULL THEN
 		RAISE EXCEPTION 'at least one topic is required';
 	END IF;
 
@@ -45,10 +45,10 @@ BEGIN
 	-- so that the client can associate the index of each topic name
 	-- with the corresponding topic id.
 	_topic_ids = array[]::bigint[];
-	FOREACH _topic IN ARRAY _topics LOOP
+	FOREACH _topic_name IN ARRAY _topic_names LOOP
 		-- Attempt to insert the topic.
-		INSERT INTO pubsub_topics (topic)
-		VALUES (_topic)
+		INSERT INTO pubsub_topics ("name")
+		VALUES (_topic_name)
 		ON CONFLICT DO NOTHING
 		RETURNING id INTO _topic_id;
 
@@ -57,11 +57,11 @@ BEGIN
 			-- Read the topic assuming it was already inserted.
 			SELECT id INTO _topic_id
 			FROM pubsub_topics AS topics
-			WHERE topics.topic = _topic;
+			WHERE topics.name = _topic_name;
 
 			-- If the topic was not found, raise an exception.
 			IF NOT FOUND THEN
-				RAISE EXCEPTION 'pubsub: topic "%" not found', _topic;
+				RAISE EXCEPTION 'pubsub: topic "%" not found', _topic_name;
 			END IF;
 		END IF;
 

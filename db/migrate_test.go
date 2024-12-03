@@ -2,10 +2,13 @@ package db
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
+	"net/url"
 	"testing"
 
 	"github.com/amacneil/dbmate/v2/pkg/dbmate"
+	"github.com/google/uuid"
 	"github.com/jeremybower/go-common/env"
 	"github.com/jeremybower/go-common/slogw"
 	"github.com/neilotoole/slogt"
@@ -15,9 +18,17 @@ func TestMigrateUpDownUp(t *testing.T) {
 	// Setup logger for testing.
 	logger := slogt.New(t)
 
+	// Parse the database url.
+	u, err := url.Parse(env.Required("DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Replace the path with a unique database name.
+	u.Path = fmt.Sprintf("/test-%s", uuid.NewString())
+
 	// Setup dbmate.
-	url := env.RequiredURL("DATABASE_URL")
-	db := dbmate.New(&url)
+	db := dbmate.New(u)
 	db.MigrationsTableName = "pubsub_schema_migrations"
 	db.AutoDumpSchema = false
 	db.FS = fs

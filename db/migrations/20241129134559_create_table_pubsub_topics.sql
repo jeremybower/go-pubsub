@@ -1,7 +1,7 @@
 -- migrate:up
 CREATE TABLE pubsub_topics(
 	"id" bigserial PRIMARY KEY,
-	"topic" text UNIQUE NOT NULL
+	"name" text UNIQUE NOT NULL
 );
 
 -- migrate:down
