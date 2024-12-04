@@ -66,7 +66,7 @@ func TestSubscribe(t *testing.T) {
 
 	// Publish a message.
 	value := &TestValue{Value: 42}
-	receipt := h.Publish(topicNames, value, NewJSONEncoder())
+	receipt := h.Publish(value, NewJSONEncoder(), topicNames)
 
 	// Assert the events.
 	h.WaitConsumeStatusEventSubscribed(sub, true)
@@ -110,7 +110,7 @@ func TestSubscribeExcludesOtherTopics(t *testing.T) {
 	// Publish a message.
 	otherTopicNames := h.GenerateTopicNames(1)
 	value := &TestValue{Value: 42}
-	h.Publish(otherTopicNames, value, NewJSONEncoder())
+	h.Publish(value, NewJSONEncoder(), otherTopicNames)
 
 	// Assert the events.
 	h.WaitConsumeStatusEventSubscribed(sub, true)
@@ -131,7 +131,7 @@ func TestSubscribeWhenMissedMessages(t *testing.T) {
 	// Publish messages.
 	topicNames := h.GenerateTopicNames(1)
 	values := h.GenerateValues(10)
-	receipts := h.PublishMany(topicNames, values, NewJSONEncoder())
+	receipts := h.PublishMany(values, NewJSONEncoder(), topicNames)
 
 	// Restart after the first message.
 	restartAtMessageID := receipts[0].MessageID
@@ -194,7 +194,7 @@ func TestSubscribeWhenStoppedAfterSubscribed(t *testing.T) {
 
 	// Publish a message.
 	value := &TestValue{Value: 42}
-	receipt := h.Publish(topicNames, value, NewJSONEncoder())
+	receipt := h.Publish(value, NewJSONEncoder(), topicNames)
 
 	// Assert the events.
 	h.WaitConsumeStatusEventSubscribed(sub, true)

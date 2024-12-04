@@ -13,7 +13,6 @@ services:
     image: postgres:17
     restart: unless-stopped
     hostname: postgres
-    command: [ "postgres", "-c", "log_statement=all", "-c", "log_min_messages=NOTICE" ]
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres

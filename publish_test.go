@@ -66,14 +66,14 @@ func TestPublishWhenValueAndEncoderAreNotBothNil(t *testing.T) {
 	// Publish the message.
 	assert.Panics(t, func() {
 		topicNames := h.GenerateTopicNames(1)
-		Publish(h.Context(), h.DBPool(), topicNames, nil, NewJSONEncoder())
+		Publish(h.Context(), h.DBPool(), nil, NewJSONEncoder(), topicNames)
 	})
 
 	// Publish the message.
 	assert.Panics(t, func() {
 		topicNames := h.GenerateTopicNames(1)
 		value := &TestValue{Value: 42}
-		Publish(h.Context(), h.DBPool(), topicNames, value, nil)
+		Publish(h.Context(), h.DBPool(), value, nil, topicNames)
 	})
 }
 
@@ -91,7 +91,7 @@ func TestPublishWhenEncoderFails(t *testing.T) {
 	// Publish the message.
 	topicNames := h.GenerateTopicNames(1)
 	value := &TestValue{Value: 42}
-	h.PublishExpectingError(assert.AnError, topicNames, value, mockEncoder)
+	h.PublishExpectingError(assert.AnError, value, mockEncoder, topicNames)
 }
 
 func TestPublishWhenValueIsNil(t *testing.T) {
@@ -106,7 +106,7 @@ func TestPublishWhenValueIsNil(t *testing.T) {
 	topicNames := []string{topicName}
 
 	// Publish the message.
-	receipt := h.Publish(topicNames, nil, nil)
+	receipt := h.Publish(nil, nil, topicNames)
 	assert.Greater(t, receipt.MessageID, MessageID(0))
 	assert.Greater(t, receipt.Topics[0].ID, TopicID(0))
 	assert.Equal(t, topicName, receipt.Topics[0].Name)
@@ -132,7 +132,7 @@ func TestPublishWhenValueIsJSONEncoded(t *testing.T) {
 	encodedValueBytes := []byte(`{"value":42}`)
 
 	// Publish the message.
-	receipt := h.Publish(topicNames, value, NewJSONEncoder())
+	receipt := h.Publish(value, NewJSONEncoder(), topicNames)
 	assert.Greater(t, receipt.MessageID, MessageID(0))
 	assert.Greater(t, receipt.Topics[0].ID, TopicID(0))
 	assert.Equal(t, topicName, receipt.Topics[0].Name)
@@ -153,7 +153,7 @@ func TestPublishMany(t *testing.T) {
 	values := h.GenerateValues(3)
 
 	// Publish messages.
-	receipts := h.PublishMany(topicNames, values, NewJSONEncoder())
+	receipts := h.PublishMany(values, NewJSONEncoder(), topicNames)
 
 	// Create the set of expected encoded messages.
 	expected := h.GenerateEncodedMessages(topicNames, values, receipts)
@@ -183,7 +183,7 @@ func TestPublishWhenCommonLoggerNotSetOnContext(t *testing.T) {
 	ctx := context.Background()
 
 	topicNames := []string{"test"}
-	receipt, err := Publish(ctx, dbPool, topicNames, nil, nil)
+	receipt, err := Publish(ctx, dbPool, nil, nil, topicNames)
 	require.ErrorIs(t, err, common.ErrLoggerNotSet)
 	assert.Nil(t, receipt)
 }
@@ -201,7 +201,7 @@ func TestPublishWhenPublishFails(t *testing.T) {
 	mockDataStore.On("Publish", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Once().Return((*PublishReceipt)(nil), assert.AnError)
 
 	// Publish a message.
-	h.PublishExpectingError(assert.AnError, topicNames, nil, nil)
+	h.PublishExpectingError(assert.AnError, nil, nil, topicNames)
 
 	// Verify the dependencies were called.
 	mockDataStore.AssertExpectations(t)

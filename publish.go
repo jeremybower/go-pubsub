@@ -11,21 +11,21 @@ import (
 func Publish(
 	ctx context.Context,
 	querier postgres.Querier,
-	topicNames []string,
 	value any,
 	encoder Encoder,
+	topicNames []string,
 ) (*PublishReceipt, error) {
 	dataStore := NewPostgresDataStore()
-	return publish(dataStore, ctx, querier, topicNames, value, encoder)
+	return publish(dataStore, ctx, querier, value, encoder, topicNames)
 }
 
 func publish(
 	dataStore DataStore,
 	ctx context.Context,
 	querier postgres.Querier,
-	topicNames []string,
 	value any,
 	encoder Encoder,
+	topicNames []string,
 ) (*PublishReceipt, error) {
 	// Check that the context is not nil.
 	if ctx == nil {

@@ -116,6 +116,10 @@ func (sub *Subscription) Event() any {
 	return nil
 }
 
+func (sub *Subscription) ID() SubscriptionID {
+	return sub.id
+}
+
 func (sub *Subscription) WaitForEvent(ctx context.Context, waiting ...chan bool) (any, error) {
 	// If there is an event in the queue, then return it immediately.
 	event := sub.Event()

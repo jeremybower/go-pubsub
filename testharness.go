@@ -127,35 +127,35 @@ func (h *TestHarness) Logger() *slog.Logger {
 }
 
 func (h *TestHarness) Publish(
-	topicNames []string,
 	v any,
 	encoder Encoder,
+	topicNames []string,
 ) *PublishReceipt {
-	receipt, err := publish(h.dataStore, h.context, h.dbPool, topicNames, v, encoder)
+	receipt, err := publish(h.dataStore, h.context, h.dbPool, v, encoder, topicNames)
 	require.NotNil(h.t, receipt)
 	require.NoError(h.t, err)
 	return receipt
 }
 
 func (h *TestHarness) PublishMany(
-	topicNames []string,
 	values []any,
 	encoder Encoder,
+	topicNames []string,
 ) []*PublishReceipt {
 	receipts := make([]*PublishReceipt, len(values))
 	for i, value := range values {
-		receipts[i] = h.Publish(topicNames, value, encoder)
+		receipts[i] = h.Publish(value, encoder, topicNames)
 	}
 	return receipts
 }
 
 func (h *TestHarness) PublishExpectingError(
 	expectedErr error,
-	topicNames []string,
 	v any,
 	encoder Encoder,
+	topicNames []string,
 ) {
-	receipt, err := publish(h.dataStore, h.context, h.dbPool, topicNames, v, encoder)
+	receipt, err := publish(h.dataStore, h.context, h.dbPool, v, encoder, topicNames)
 	require.Nil(h.t, receipt)
 	require.ErrorIs(h.t, err, expectedErr)
 }

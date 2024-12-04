@@ -21,6 +21,12 @@ init: ## Initialize the project.
 
 test: ## Test the project.
 test: | _include_env
+	@echo "Dropping test databases..."
+	@set -e; for dbname in $$(psql "${DATABASE_URL}" -t -A -c "SELECT datname FROM pg_database WHERE datname LIKE 'test-%'" | cat) ; do \
+		echo "$$dbname"; \
+		psql "${DATABASE_URL}" -q -c "DROP DATABASE \"$$dbname\"" ; \
+	done
+
 	@echo "Testing..."
 	@mkdir -p coverage
 	@go test \
@@ -35,12 +41,6 @@ test: | _include_env
 	@go tool cover \
 		-html=coverage/coverage.out \
 		-o coverage/coverage.html
-
-	@echo "Dropping test databases..."
-	@set -e; for dbname in $$(psql "${DATABASE_URL}" -t -A -c "SELECT datname FROM pg_database WHERE datname LIKE 'test-%'" | cat) ; do \
-		echo "$$dbname"; \
-		psql "${DATABASE_URL}" -q -c "DROP DATABASE \"$$dbname\"" ; \
-	done
 
 #
 # Dependencies
