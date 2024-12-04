@@ -2,6 +2,7 @@ package pubsub
 
 import (
 	"context"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -25,9 +26,19 @@ func (md *MockDataStore) AcquireConnection(ctx context.Context, dbPool *pgxpool.
 	return mockArgs.Get(0).(*pgxpool.Conn), mockArgs.Error(1)
 }
 
-func (md *MockDataStore) Publish(ctx context.Context, querier postgres.Querier, topicNames []string, value any, encodedValue *EncodedValue) (*PublishReceipt, error) {
+func (md *MockDataStore) PatchConfiguration(ctx context.Context, querier postgres.Querier, patch ConfigurationPatch) (*Configuration, error) {
+	mockArgs := md.Called(ctx, querier, patch)
+	return mockArgs.Get(0).(*Configuration), mockArgs.Error(1)
+}
+
+func (md *MockDataStore) Publish(ctx context.Context, querier postgres.Querier, topicNames []string, value any, encodedValue *EncodedValue, publishedAt *time.Time) (*PublishReceipt, int64, error) {
 	mockArgs := md.Called(ctx, querier, topicNames, encodedValue)
-	return mockArgs.Get(0).(*PublishReceipt), mockArgs.Error(1)
+	return mockArgs.Get(0).(*PublishReceipt), mockArgs.Get(1).(int64), mockArgs.Error(2)
+}
+
+func (md *MockDataStore) ReadConfiguration(ctx context.Context, querier postgres.Querier) (*Configuration, error) {
+	mockArgs := md.Called(ctx, querier)
+	return mockArgs.Get(0).(*Configuration), mockArgs.Error(1)
 }
 
 func (md *MockDataStore) ReadEncodedMessagesAfterID(ctx context.Context, querier postgres.Querier, messageID MessageID, topics []string) (chan common.Result[EncodedMessage], error) {

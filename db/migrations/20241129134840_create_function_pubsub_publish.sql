@@ -1,22 +1,25 @@
 -- migrate:up
 CREATE FUNCTION pubsub_publish(
-  _topic_names  text[],
-	_content_type text,
-  _bytes        bytea
+  _topic_names            text[],
+	_content_type           text,
+  _bytes                  bytea,
+	_published_at           timestamp
 ) RETURNS TABLE(
-	message_id    bigint,
-	topic_ids     bigint[],
-	published_at  timestamp
+	message_id              bigint,
+	topic_ids               bigint[],
+	published_at            timestamp,
+	deleted_message_count   bigint
 ) AS $$
 DECLARE
-	_channel      text;
-	_has_value    boolean;
-	_notification text;
-	_message_id   bigint;
-	_published_at timestamp;
-	_topic_name   text;
-	_topic_id     bigint;
-	_topic_ids    bigint[];
+	_channel                text;
+	_deleted_message_count  bigint;
+	_has_value              boolean;
+	_missed_message_seconds integer;
+	_notification           text;
+	_message_id             bigint;
+	_topic_name             text;
+	_topic_id             	bigint;
+	_topic_ids              bigint[];
 BEGIN
 	-- There must be at least one topic.
 	IF _topic_names IS NULL OR array_length(_topic_names, 1) IS NULL THEN
@@ -28,10 +31,25 @@ BEGIN
 		RAISE EXCEPTION 'value and content type must be provided together';
 	END IF;
 
+	-- Read the configuration.
+	SELECT missed_message_seconds
+	INTO _missed_message_seconds
+	FROM pubsub_configurations;
+	IF NOT FOUND THEN
+		RAISE EXCEPTION 'pubsub: configuration not found';
+	END IF;
+
 	-- Insert the message.
-	INSERT INTO pubsub_messages DEFAULT VALUES
-	RETURNING pubsub_messages.id, pubsub_messages.published_at
-	INTO _message_id, _published_at;
+	IF _published_at IS NULL THEN
+		INSERT INTO pubsub_messages DEFAULT VALUES
+		RETURNING pubsub_messages.id, pubsub_messages.published_at
+		INTO _message_id, _published_at;
+	ELSE
+		INSERT INTO pubsub_messages ("published_at")
+		VALUES (_published_at)
+		RETURNING pubsub_messages.id
+		INTO _message_id;
+	END IF;
 
 	-- Insert the value.
 	_has_value = (_content_type IS NOT NULL AND _bytes IS NOT NULL);
@@ -91,8 +109,13 @@ BEGIN
 		EXECUTE pg_notify(_channel, _notification);
 	END LOOP;
 
+	-- Delete messages older than the missed message threshold.
+	DELETE FROM pubsub_messages
+	WHERE pubsub_messages.published_at < _published_at - make_interval(secs => _missed_message_seconds);
+	GET DIAGNOSTICS _deleted_message_count = ROW_COUNT;
+
 	-- Return the message id.
-	RETURN QUERY SELECT _message_id, _topic_ids, _published_at;
+	RETURN QUERY SELECT _message_id, _topic_ids, _published_at, _deleted_message_count;
 END;
 $$
 LANGUAGE plpgsql;

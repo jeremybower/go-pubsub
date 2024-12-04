@@ -52,7 +52,7 @@ func TestSubscribeWhenDatabasePoolIsNil(t *testing.T) {
 func TestSubscribe(t *testing.T) {
 	t.Parallel()
 
-	// Create a client test harness.
+	// Create a test harness.
 	h := NewTestHarness(t, NewPostgresDataStore())
 	defer h.Close()
 
@@ -66,7 +66,8 @@ func TestSubscribe(t *testing.T) {
 
 	// Publish a message.
 	value := &TestValue{Value: 42}
-	receipt := h.Publish(value, NewJSONEncoder(), topicNames)
+	receipt, deletedMessageCount := h.Publish(value, NewJSONEncoder(), topicNames)
+	assert.Zero(t, deletedMessageCount)
 
 	// Assert the events.
 	h.WaitConsumeStatusEventSubscribed(sub, true)
@@ -83,7 +84,7 @@ func TestSubscribe(t *testing.T) {
 func TestSubscribeWhenTopicValidationFails(t *testing.T) {
 	t.Parallel()
 
-	// Create a client test harness.
+	// Create a test harness.
 	h := NewTestHarness(t, NewPostgresDataStore())
 	defer h.Close()
 
@@ -95,7 +96,7 @@ func TestSubscribeWhenTopicValidationFails(t *testing.T) {
 func TestSubscribeExcludesOtherTopics(t *testing.T) {
 	t.Parallel()
 
-	// Create a client test harness.
+	// Create a test harness.
 	h := NewTestHarness(t, NewPostgresDataStore())
 	defer h.Close()
 
@@ -124,14 +125,15 @@ func TestSubscribeExcludesOtherTopics(t *testing.T) {
 func TestSubscribeWhenMissedMessages(t *testing.T) {
 	t.Parallel()
 
-	// Create a client test harness.
+	// Create a test harness.
 	h := NewTestHarness(t, NewPostgresDataStore())
 	defer h.Close()
 
 	// Publish messages.
 	topicNames := h.GenerateTopicNames(1)
 	values := h.GenerateValues(10)
-	receipts := h.PublishMany(values, NewJSONEncoder(), topicNames)
+	receipts, deletedMessageCount := h.PublishMany(values, NewJSONEncoder(), topicNames)
+	assert.Zero(t, deletedMessageCount)
 
 	// Restart after the first message.
 	restartAtMessageID := receipts[0].MessageID
@@ -180,7 +182,7 @@ func TestSubscribeWhenLoggerNotSetOnContext(t *testing.T) {
 func TestSubscribeWhenStoppedAfterSubscribed(t *testing.T) {
 	t.Parallel()
 
-	// Create a client test harness.
+	// Create a test harness.
 	h := NewTestHarness(t, NewPostgresDataStore())
 	defer h.Close()
 
@@ -194,7 +196,8 @@ func TestSubscribeWhenStoppedAfterSubscribed(t *testing.T) {
 
 	// Publish a message.
 	value := &TestValue{Value: 42}
-	receipt := h.Publish(value, NewJSONEncoder(), topicNames)
+	receipt, deletedMessageCount := h.Publish(value, NewJSONEncoder(), topicNames)
+	assert.Zero(t, deletedMessageCount)
 
 	// Assert the events.
 	h.WaitConsumeStatusEventSubscribed(sub, true)
@@ -211,7 +214,7 @@ func TestSubscribeWhenStoppedAfterSubscribed(t *testing.T) {
 func TestSubscribeWhenSubscriptionDelayed(t *testing.T) {
 	t.Parallel()
 
-	// Create a client test harness.
+	// Create a test harness.
 	mockDataStore := NewMockDataStore()
 	h := NewTestHarness(t, mockDataStore)
 	defer h.Close()
@@ -241,7 +244,7 @@ func TestSubscribeWhenSubscriptionDelayed(t *testing.T) {
 func TestSubscribeWhenSubscriptionCancelled(t *testing.T) {
 	t.Parallel()
 
-	// Create a client test harness.
+	// Create a test harness.
 	h := NewTestHarness(t, NewPostgresDataStore())
 	defer h.Close()
 

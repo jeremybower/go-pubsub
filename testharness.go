@@ -126,27 +126,39 @@ func (h *TestHarness) Logger() *slog.Logger {
 	return h.logger
 }
 
+func (h *TestHarness) PatchConfiguration(
+	patch ConfigurationPatch,
+) *Configuration {
+	configuration, err := PatchConfiguration(h.context, h.dbPool, patch)
+	require.NotNil(h.t, configuration)
+	require.NoError(h.t, err)
+	return configuration
+}
+
 func (h *TestHarness) Publish(
 	v any,
 	encoder Encoder,
 	topicNames []string,
-) *PublishReceipt {
-	receipt, err := publish(h.dataStore, h.context, h.dbPool, v, encoder, topicNames)
+) (*PublishReceipt, int64) {
+	receipt, deletedMessageCount, err := publish(h.dataStore, h.context, h.dbPool, v, encoder, topicNames, nil)
 	require.NotNil(h.t, receipt)
 	require.NoError(h.t, err)
-	return receipt
+	return receipt, deletedMessageCount
 }
 
 func (h *TestHarness) PublishMany(
 	values []any,
 	encoder Encoder,
 	topicNames []string,
-) []*PublishReceipt {
+) ([]*PublishReceipt, int64) {
+	var deletedMessageCount int64
 	receipts := make([]*PublishReceipt, len(values))
 	for i, value := range values {
-		receipts[i] = h.Publish(value, encoder, topicNames)
+		receipt, count := h.Publish(value, encoder, topicNames)
+		receipts[i] = receipt
+		deletedMessageCount += count
 	}
-	return receipts
+	return receipts, deletedMessageCount
 }
 
 func (h *TestHarness) PublishExpectingError(
@@ -155,9 +167,17 @@ func (h *TestHarness) PublishExpectingError(
 	encoder Encoder,
 	topicNames []string,
 ) {
-	receipt, err := publish(h.dataStore, h.context, h.dbPool, v, encoder, topicNames)
+	receipt, deletedMessageCount, err := publish(h.dataStore, h.context, h.dbPool, v, encoder, topicNames, nil)
 	require.Nil(h.t, receipt)
+	require.Zero(h.t, deletedMessageCount)
 	require.ErrorIs(h.t, err, expectedErr)
+}
+
+func (h *TestHarness) ReadConfiguration() *Configuration {
+	configuration, err := ReadConfiguration(h.context, h.dbPool)
+	require.NotNil(h.t, configuration)
+	require.NoError(h.t, err)
+	return configuration
 }
 
 func (h *TestHarness) SortEncodedMessages(m []EncodedMessage) {

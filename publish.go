@@ -3,6 +3,7 @@ package pubsub
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/jeremybower/go-common"
 	"github.com/jeremybower/go-common/postgres"
@@ -14,9 +15,9 @@ func Publish(
 	value any,
 	encoder Encoder,
 	topicNames []string,
-) (*PublishReceipt, error) {
+) (*PublishReceipt, int64, error) {
 	dataStore := NewPostgresDataStore()
-	return publish(dataStore, ctx, querier, value, encoder, topicNames)
+	return publish(dataStore, ctx, querier, value, encoder, topicNames, nil)
 }
 
 func publish(
@@ -26,7 +27,8 @@ func publish(
 	value any,
 	encoder Encoder,
 	topicNames []string,
-) (*PublishReceipt, error) {
+	publishedAt *time.Time,
+) (*PublishReceipt, int64, error) {
 	// Check that the context is not nil.
 	if ctx == nil {
 		panic("pubsub: context is nil")
@@ -40,7 +42,7 @@ func publish(
 	// Check that the topics are valid.
 	err := validateTopics(topicNames)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	// Check that value and encoder are either both nil or both not nil.
@@ -51,7 +53,7 @@ func publish(
 	// Get the logger from the context.
 	logger, err := common.Logger(ctx)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	// Encode the value.
@@ -59,14 +61,14 @@ func publish(
 	if value != nil && encoder != nil {
 		encodedValue, err = encoder.Encode(ctx, value)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 	}
 
 	// Insert the message into the data store.
-	receipt, err := dataStore.Publish(ctx, querier, topicNames, value, encodedValue)
+	receipt, deletedMessageCount, err := dataStore.Publish(ctx, querier, topicNames, value, encodedValue, publishedAt)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	// Log that the message was published.
@@ -76,5 +78,5 @@ func publish(
 	)
 
 	// Return the receipt.
-	return receipt, nil
+	return receipt, deletedMessageCount, nil
 }

@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jeremybower/go-common"
 	"github.com/jeremybower/go-common/postgres"
@@ -15,6 +16,16 @@ import (
 var _ DataStore = NewPostgresDataStore()
 
 type PostgresDataStore struct{}
+
+type configurationRow struct {
+	MissedMessageSeconds pgtype.Int4
+}
+
+func (row *configurationRow) toModel() *Configuration {
+	return &Configuration{
+		MissedMessageSeconds: postgres.RequiredInt4[int32](row.MissedMessageSeconds),
+	}
+}
 
 func NewPostgresDataStore() *PostgresDataStore {
 	return &PostgresDataStore{}
@@ -28,28 +39,51 @@ func (sd *PostgresDataStore) AcquireConnection(
 	return conn, postgres.NormalizeError(err)
 }
 
+var patchConfigurationsTempl = postgres.MustParse(
+	`UPDATE pubsub_configurations SET
+	{{ join "," }}
+		{{ if .MissedMessageSeconds.Valid }} {{ sep }} "missed_message_seconds" = {{ arg .MissedMessageSeconds.Value }} {{ end }}
+	{{ endJoin }}
+	RETURNING *;`,
+)
+
+func (sd *PostgresDataStore) PatchConfiguration(
+	ctx context.Context,
+	querier postgres.Querier,
+	patch ConfigurationPatch,
+) (*Configuration, error) {
+	row, err := postgres.ReadOneT[configurationRow](ctx, querier, patchConfigurationsTempl, map[string]any{
+		"MissedMessageSeconds": patch.MissedMessageSeconds,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return row.toModel(), nil
+}
+
 func (sd *PostgresDataStore) Publish(
 	ctx context.Context,
 	querier postgres.Querier,
 	topicNames []string,
 	value any,
 	encodedValue *EncodedValue,
-) (*PublishReceipt, error) {
+	publishedAt *time.Time,
+) (*PublishReceipt, int64, error) {
 	var id MessageID
 	var topicIDs []TopicID
-	var publishedAt time.Time
 	var contentType *string
 	var bytes []byte
-
+	var deletedMessageCount int64
 	if encodedValue != nil {
 		contentType = &encodedValue.ContentType
 		bytes = encodedValue.Bytes
 	}
 
-	sql := "SELECT message_id, topic_ids, published_at FROM pubsub_publish($1, $2, $3);"
-	err := querier.QueryRow(ctx, sql, topicNames, contentType, bytes).Scan(&id, &topicIDs, &publishedAt)
+	sql := "SELECT message_id, topic_ids, published_at, deleted_message_count FROM pubsub_publish($1, $2, $3, $4);"
+	err := querier.QueryRow(ctx, sql, topicNames, contentType, bytes, publishedAt).Scan(&id, &topicIDs, &publishedAt, &deletedMessageCount)
 	if err != nil {
-		return nil, postgres.NormalizeError(err)
+		return nil, 0, postgres.NormalizeError(err)
 	}
 
 	// Build the topics.
@@ -65,8 +99,21 @@ func (sd *PostgresDataStore) Publish(
 		Topics:       topics,
 		Value:        value,
 		EncodedValue: encodedValue,
-		PublishedAt:  publishedAt,
-	}, nil
+		PublishedAt:  *publishedAt,
+	}, deletedMessageCount, nil
+}
+
+func (sd *PostgresDataStore) ReadConfiguration(
+	ctx context.Context,
+	querier postgres.Querier,
+) (*Configuration, error) {
+	sql := `SELECT * FROM "pubsub_configurations" LIMIT 1`
+	row, err := postgres.ReadOne[configurationRow](ctx, querier, sql)
+	if err != nil {
+		return nil, err
+	}
+
+	return row.toModel(), nil
 }
 
 func (sd *PostgresDataStore) ReadEncodedMessagesAfterID(

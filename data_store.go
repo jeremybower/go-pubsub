@@ -2,6 +2,7 @@ package pubsub
 
 import (
 	"context"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -11,7 +12,9 @@ import (
 
 type DataStore interface {
 	AcquireConnection(ctx context.Context, dbPool *pgxpool.Pool) (*pgxpool.Conn, error)
-	Publish(ctx context.Context, querier postgres.Querier, topicNames []string, value any, encodedValue *EncodedValue) (*PublishReceipt, error)
+	PatchConfiguration(ctx context.Context, querier postgres.Querier, patch ConfigurationPatch) (*Configuration, error)
+	Publish(ctx context.Context, querier postgres.Querier, topicNames []string, value any, encodedValue *EncodedValue, publishedAt *time.Time) (*PublishReceipt, int64, error)
+	ReadConfiguration(ctx context.Context, querier postgres.Querier) (*Configuration, error)
 	ReadEncodedMessagesAfterID(ctx context.Context, querier postgres.Querier, messageID MessageID, topicNames []string) (chan common.Result[EncodedMessage], error)
 	ReadEncodedMessagesWithID(ctx context.Context, querier postgres.Querier, messageID MessageID) (chan common.Result[EncodedMessage], error)
 	ReadEncodedValue(ctx context.Context, querier postgres.Querier, messageID MessageID) (*EncodedValue, error)
