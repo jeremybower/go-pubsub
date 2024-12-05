@@ -252,13 +252,12 @@ func (sub *Subscription) handleEncodedMessage(
 ) (*Message, error) {
 	// Create a logger with the message ID and encoding.
 	logger = logger.With(slog.Int64("pubsub:message_id", int64(encodedMessage.MessageID)))
-	if encodedMessage.EncodedValue != nil {
-		logger = logger.With(slog.String("pubsub:message_content_type", encodedMessage.EncodedValue.ContentType))
-	}
 
 	// Log that a message was received.
 	logger.Debug("pubsub: received message",
-		slog.Duration("pubsub:latency", time.Since(encodedMessage.PublishedAt)),
+		slog.String("pubsub:latency", time.Since(encodedMessage.PublishedAt).String()),
+		slog.Int64("pubsub:topic_id", int64(encodedMessage.Topic.ID)),
+		slog.String("pubsub:topic_name", encodedMessage.Topic.Name),
 	)
 
 	// Decode the value.
