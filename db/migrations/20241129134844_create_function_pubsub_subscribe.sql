@@ -52,9 +52,6 @@ BEGIN
 		_topic_ids = array_append(_topic_ids, _topic_id);
 	END LOOP;
 
-	-- Listen for control messages on the channel.
-	EXECUTE 'LISTEN pubsub_control';
-
 	-- Get the max message id for the given topics.
 	SELECT coalesce(max(messages.id), 0) INTO _max_message_id
 	FROM pubsub_messages AS messages
